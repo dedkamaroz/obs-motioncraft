@@ -40,6 +40,7 @@ public:
 	void saveSettings();
 	void loadSettings();
 	void notifySettingsChanged();
+	void rebuildRuntimeHooks();
 
 	QString screenKey;
 	QString hotkeySequence;
@@ -77,7 +78,7 @@ public:
 
 	
 	
-	QSet<QString> excludedSources;
+	QSet<QString> includedSources;
 
 signals:
 	void settingsChanged();
@@ -100,6 +101,8 @@ private:
 	void rebuildTriggersFromSettings();
 	void installHooks();
 	void uninstallHooks();
+	bool needsKeyboardHook() const;
+	bool needsMouseHook() const;
 	void onTriggerDown();
 	void onTriggerUp();
 	void toggleFollowMouseRuntime();

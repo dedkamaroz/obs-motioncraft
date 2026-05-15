@@ -1,6 +1,7 @@
 #include "zoominator-dialog.hpp"
 #include "zoominator-controller.hpp"
 
+#include <obs-module.h>
 #include <obs-frontend-api.h>
 #include <obs.h>
 
@@ -35,6 +36,11 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 #include <QString>
 
 namespace {
+
+static QString T(const char *key)
+{
+	return QString::fromUtf8(obs_module_text(key));
+}
 
 static QWidget *mkField(const QString &labelText, QWidget *input)
 {
@@ -98,25 +104,25 @@ static bool key_sequence_is_modifier_only(const QKeySequence &seq)
 
 static QString friendlySourceKind(const QString &kind)
 {
-	if (kind == "image_source")                                   return "Image";
-	if (kind == "browser_source")                                 return "Browser";
-	if (kind == "game_capture")                                   return "Game Capture";
-	if (kind == "window_capture")                                 return "Window Capture";
+	if (kind == "image_source")                                   return T("SourceKind.Image");
+	if (kind == "browser_source")                                 return T("SourceKind.Browser");
+	if (kind == "game_capture")                                   return T("SourceKind.GameCapture");
+	if (kind == "window_capture")                                 return T("SourceKind.WindowCapture");
 	if (kind == "monitor_capture" || kind == "display_capture" ||
-	    kind == "screen_capture")                                 return "Display Capture";
+	    kind == "screen_capture")                                 return T("SourceKind.DisplayCapture");
 	if (kind == "dshow_input" || kind == "av_capture_input" ||
-	    kind == "video_capture_device")                           return "Video Capture";
+	    kind == "video_capture_device")                           return T("SourceKind.VideoCapture");
 	if (kind == "wasapi_input_capture" ||
-	    kind == "coreaudio_input_capture")                        return "Audio Input";
+	    kind == "coreaudio_input_capture")                        return T("SourceKind.AudioInput");
 	if (kind == "wasapi_output_capture" ||
-	    kind == "coreaudio_output_capture")                       return "Audio Output";
-	if (kind == "scene")                                          return "Scene";
-	if (kind == "group")                                          return "Group";
-	if (kind == "text_gdiplus" || kind == "text_ft2_source")     return "Text";
-	if (kind == "color_source")                                   return "Color";
-	if (kind == "ffmpeg_source")                                  return "Media";
-	if (kind == "vlc_source")                                     return "VLC Media";
-	if (kind == "slideshow")                                      return "Image Slideshow";
+	    kind == "coreaudio_output_capture")                       return T("SourceKind.AudioOutput");
+	if (kind == "scene")                                          return T("SourceKind.Scene");
+	if (kind == "group")                                          return T("SourceKind.Group");
+	if (kind == "text_gdiplus" || kind == "text_ft2_source")     return T("SourceKind.Text");
+	if (kind == "color_source")                                   return T("SourceKind.Color");
+	if (kind == "ffmpeg_source")                                  return T("SourceKind.Media");
+	if (kind == "vlc_source")                                     return T("SourceKind.VlcMedia");
+	if (kind == "slideshow")                                      return T("SourceKind.ImageSlideshow");
 	return kind; 
 }
 
@@ -124,7 +130,7 @@ static QString friendlySourceKind(const QString &kind)
 
 ZoominatorDialog::ZoominatorDialog(QWidget *parent) : QDialog(parent)
 {
-	setWindowTitle(QStringLiteral("Zoominator"));
+	setWindowTitle(T("Zoominator"));
 	setModal(false);
 	resize(620, 560);
 
@@ -183,14 +189,14 @@ void ZoominatorDialog::buildUi()
 
 		
 		cmbSource = new QComboBox(page);
-		lay->addWidget(mkField("Target Screen", cmbSource));
+		lay->addWidget(mkField(T("Dialog.TargetScreen"), cmbSource));
 		lay->addSpacing(16);
 
 		
 		cmbMode = new QComboBox(page);
-		cmbMode->addItem("Hold: press to zoom, release to restore", "hold");
-		cmbMode->addItem("Toggle: first press zooms, second restores", "toggle");
-		lay->addWidget(mkField("Behavior", cmbMode));
+		cmbMode->addItem(T("Dialog.Mode.Hold"), "hold");
+		cmbMode->addItem(T("Dialog.Mode.Toggle"), "toggle");
+		lay->addWidget(mkField(T("Dialog.Behavior"), cmbMode));
 		lay->addSpacing(16);
 
 		
@@ -200,15 +206,15 @@ void ZoominatorDialog::buildUi()
 			h->setContentsMargins(0, 0, 0, 0);
 			h->setSpacing(6);
 			editFollowToggleHotkey     = new QKeySequenceEdit(followHkRow);
-			btnClearFollowToggleHotkey = new QPushButton("Clear", followHkRow);
-			btnClearFollowToggleHotkey->setToolTip("Clear follow-mouse toggle hotkey");
+			btnClearFollowToggleHotkey = new QPushButton(T("Dialog.Clear"), followHkRow);
+			btnClearFollowToggleHotkey->setToolTip(T("Dialog.ClearFollowToggleTooltip"));
 			h->addWidget(editFollowToggleHotkey, 1);
 			h->addWidget(btnClearFollowToggleHotkey);
 		}
-		lay->addWidget(mkField("Follow Mouse Toggle Hotkey", followHkRow));
+		lay->addWidget(mkField(T("Dialog.FollowToggleHotkey"), followHkRow));
 
 		lay->addStretch(1);
-		tabWidget->addTab(page, "Target");
+		tabWidget->addTab(page, T("Dialog.Tab.Target"));
 	}
 
 	
@@ -222,9 +228,9 @@ void ZoominatorDialog::buildUi()
 
 		
 		cmbTrigger = new QComboBox(page);
-		cmbTrigger->addItem("Keyboard", "keyboard");
-		cmbTrigger->addItem("Mouse Button", "mouse");
-		lay->addWidget(mkField("Trigger Type", cmbTrigger));
+		cmbTrigger->addItem(T("Dialog.Trigger.Keyboard"), "keyboard");
+		cmbTrigger->addItem(T("Dialog.Trigger.MouseButton"), "mouse");
+		lay->addWidget(mkField(T("Dialog.TriggerType"), cmbTrigger));
 		lay->addSpacing(16);
 
 		
@@ -233,12 +239,12 @@ void ZoominatorDialog::buildUi()
 			auto *v = new QVBoxLayout(rowHotkeyWidget);
 			v->setContentsMargins(0, 0, 0, 0);
 			v->setSpacing(4);
-			v->addWidget(new QLabel("Hotkey", rowHotkeyWidget));
+			v->addWidget(new QLabel(T("Dialog.Hotkey"), rowHotkeyWidget));
 			auto *h = new QHBoxLayout;
 			h->setSpacing(6);
 			editHotkey    = new QKeySequenceEdit(rowHotkeyWidget);
-			btnClearHotkey = new QPushButton("Clear", rowHotkeyWidget);
-			btnClearHotkey->setToolTip("Clear keyboard hotkey");
+			btnClearHotkey = new QPushButton(T("Dialog.Clear"), rowHotkeyWidget);
+			btnClearHotkey->setToolTip(T("Dialog.ClearHotkeyTooltip"));
 			h->addWidget(editHotkey, 1);
 			h->addWidget(btnClearHotkey);
 			v->addLayout(h);
@@ -251,11 +257,11 @@ void ZoominatorDialog::buildUi()
 			auto *v = new QVBoxLayout(rowMouseWidget);
 			v->setContentsMargins(0, 0, 0, 0);
 			v->setSpacing(4);
-			v->addWidget(new QLabel("Mouse Button", rowMouseWidget));
+			v->addWidget(new QLabel(T("Dialog.MouseButton"), rowMouseWidget));
 			cmbMouseBtn = new QComboBox(rowMouseWidget);
-			cmbMouseBtn->addItem("Left",   "left");
-			cmbMouseBtn->addItem("Right",  "right");
-			cmbMouseBtn->addItem("Middle", "middle");
+			cmbMouseBtn->addItem(T("Dialog.Mouse.Left"),   "left");
+			cmbMouseBtn->addItem(T("Dialog.Mouse.Right"),  "right");
+			cmbMouseBtn->addItem(T("Dialog.Mouse.Middle"), "middle");
 			cmbMouseBtn->addItem("X1",     "x1");
 			cmbMouseBtn->addItem("X2",     "x2");
 			v->addWidget(cmbMouseBtn);
@@ -269,29 +275,28 @@ void ZoominatorDialog::buildUi()
 			auto *v = new QVBoxLayout(rowModifiersWidget);
 			v->setContentsMargins(0, 0, 0, 0);
 			v->setSpacing(6);
-			v->addWidget(new QLabel("Required Modifiers", rowModifiersWidget));
+			v->addWidget(new QLabel(T("Dialog.RequiredModifiers"), rowModifiersWidget));
 			auto *grid = new QGridLayout;
 			grid->setHorizontalSpacing(10);
 			grid->setVerticalSpacing(4);
-			chkCtrl       = new QCheckBox("Ctrl (Any)",     rowModifiersWidget);
-			chkLeftCtrl   = new QCheckBox("L Ctrl",         rowModifiersWidget);
-			chkRightCtrl  = new QCheckBox("R Ctrl",         rowModifiersWidget);
-			chkAlt        = new QCheckBox("Alt (Any)",      rowModifiersWidget);
-			chkLeftAlt    = new QCheckBox("L Alt",          rowModifiersWidget);
-			chkRightAlt   = new QCheckBox("R Alt",          rowModifiersWidget);
-			chkShift      = new QCheckBox("Shift (Any)",    rowModifiersWidget);
-			chkLeftShift  = new QCheckBox("L Shift",        rowModifiersWidget);
-			chkRightShift = new QCheckBox("R Shift",        rowModifiersWidget);
-			chkWin        = new QCheckBox("Meta/Win (Any)", rowModifiersWidget);
-			chkLeftWin    = new QCheckBox("L Meta/Win",     rowModifiersWidget);
-			chkRightWin   = new QCheckBox("R Meta/Win",     rowModifiersWidget);
+			chkCtrl       = new QCheckBox(T("Dialog.Mod.CtrlAny"),     rowModifiersWidget);
+			chkLeftCtrl   = new QCheckBox(T("Dialog.Mod.LeftCtrl"),    rowModifiersWidget);
+			chkRightCtrl  = new QCheckBox(T("Dialog.Mod.RightCtrl"),   rowModifiersWidget);
+			chkAlt        = new QCheckBox(T("Dialog.Mod.AltAny"),      rowModifiersWidget);
+			chkLeftAlt    = new QCheckBox(T("Dialog.Mod.LeftAlt"),     rowModifiersWidget);
+			chkRightAlt   = new QCheckBox(T("Dialog.Mod.RightAlt"),    rowModifiersWidget);
+			chkShift      = new QCheckBox(T("Dialog.Mod.ShiftAny"),    rowModifiersWidget);
+			chkLeftShift  = new QCheckBox(T("Dialog.Mod.LeftShift"),   rowModifiersWidget);
+			chkRightShift = new QCheckBox(T("Dialog.Mod.RightShift"),  rowModifiersWidget);
+			chkWin        = new QCheckBox(T("Dialog.Mod.MetaWinAny"),  rowModifiersWidget);
+			chkLeftWin    = new QCheckBox(T("Dialog.Mod.LeftMetaWin"), rowModifiersWidget);
+			chkRightWin   = new QCheckBox(T("Dialog.Mod.RightMetaWin"), rowModifiersWidget);
 			grid->addWidget(chkCtrl,       0, 0); grid->addWidget(chkLeftCtrl,   0, 1); grid->addWidget(chkRightCtrl,  0, 2);
 			grid->addWidget(chkAlt,        1, 0); grid->addWidget(chkLeftAlt,    1, 1); grid->addWidget(chkRightAlt,   1, 2);
 			grid->addWidget(chkShift,      2, 0); grid->addWidget(chkLeftShift,  2, 1); grid->addWidget(chkRightShift, 2, 2);
 			grid->addWidget(chkWin,        3, 0); grid->addWidget(chkLeftWin,    3, 1); grid->addWidget(chkRightWin,   3, 2);
 			grid->addWidget(
-				new QLabel("Use Any for legacy behaviour, or choose L / R explicitly.",
-				           rowModifiersWidget),
+				new QLabel(T("Dialog.ModifierHelp"), rowModifiersWidget),
 				4, 0, 1, 3);
 			grid->setColumnStretch(3, 1);
 			v->addLayout(grid);
@@ -299,7 +304,7 @@ void ZoominatorDialog::buildUi()
 		lay->addWidget(rowModifiersWidget);
 
 		lay->addStretch(1);
-		tabWidget->addTab(page, "Trigger");
+		tabWidget->addTab(page, T("Dialog.Tab.Trigger"));
 
 		
 		connect(cmbTrigger, &QComboBox::currentIndexChanged, this, [this](int) {
@@ -320,37 +325,37 @@ void ZoominatorDialog::buildUi()
 		lay->setSpacing(0);
 
 		
-		addSection(lay, "Zoom", true);
+		addSection(lay, T("Dialog.Section.Zoom"), true);
 
 		
 		spZoom = new QDoubleSpinBox(page);
 		spZoom->setRange(0.0, 8.0);
 		spZoom->setSingleStep(0.05);
 		spZoom->setDecimals(2);
-		spZoom->setToolTip("Values > 1 zoom in. Set to 0 or 1 to follow-only.");
+		spZoom->setToolTip(T("Dialog.ZoomFactorTooltip"));
 
 		spIn = new QSpinBox(page);
 		spIn->setRange(0, 5000);
 		spIn->setSingleStep(10);
-		spIn->setSuffix(" ms");
+		spIn->setSuffix(T("Unit.Milliseconds"));
 
 		spOut = new QSpinBox(page);
 		spOut->setRange(0, 5000);
 		spOut->setSingleStep(10);
-		spOut->setSuffix(" ms");
+		spOut->setSuffix(T("Unit.Milliseconds"));
 
 		auto *zoomRow = new QHBoxLayout;
 		zoomRow->setSpacing(12);
-		zoomRow->addWidget(mkField("Zoom Factor",  spZoom),  1);
-		zoomRow->addWidget(mkField("Animate In",   spIn),    1);
-		zoomRow->addWidget(mkField("Animate Out",  spOut),   1);
+		zoomRow->addWidget(mkField(T("Dialog.ZoomFactor"), spZoom), 1);
+		zoomRow->addWidget(mkField(T("Dialog.AnimateIn"), spIn), 1);
+		zoomRow->addWidget(mkField(T("Dialog.AnimateOut"), spOut), 1);
 		lay->addLayout(zoomRow);
 
 		
-		addSection(lay, "Mouse Follow");
+		addSection(lay, T("Dialog.Section.MouseFollow"));
 
-		chkFollow = new QCheckBox("Enable", page);
-		chkFollow->setToolTip("Follow the cursor while it stays inside the captured region.");
+		chkFollow = new QCheckBox(T("Dialog.Enable"), page);
+		chkFollow->setToolTip(T("Dialog.FollowTooltip"));
 
 		spFollowSpeed = new QDoubleSpinBox(page);
 		spFollowSpeed->setRange(0.1, 40.0);
@@ -365,32 +370,27 @@ void ZoominatorDialog::buildUi()
 			auto *v = new QVBoxLayout(followEnableW);
 			v->setContentsMargins(0, 0, 0, 0);
 			v->setSpacing(4);
-			v->addWidget(new QLabel("Follow Mouse", followEnableW));
+			v->addWidget(new QLabel(T("Dialog.FollowMouse"), followEnableW));
 			v->addWidget(chkFollow);
 		}
 		followRow->addWidget(followEnableW, 1);
-		followRow->addWidget(mkField("Smoothing Speed", spFollowSpeed), 1);
+		followRow->addWidget(mkField(T("Dialog.SmoothingSpeed"), spFollowSpeed), 1);
 		followRow->addStretch(1);
 		lay->addLayout(followRow);
 
 		
-		addSection(lay, "Canvas");
+		addSection(lay, T("Dialog.Section.Canvas"));
 
-		chkPortraitCover = new QCheckBox(
-			"Portrait cover, auto-scale to fill vertical canvases", page);
-		chkPortraitCover->setToolTip(
-			"When the canvas is taller than wide, scale the capture so it fills"
-			" the canvas with no top / bottom gaps.");
+		chkPortraitCover = new QCheckBox(T("Dialog.PortraitCover"), page);
+		chkPortraitCover->setToolTip(T("Dialog.PortraitCoverTooltip"));
 		lay->addWidget(chkPortraitCover);
 
 		
-		addSection(lay, "Cursor Halo");
+		addSection(lay, T("Dialog.Section.CursorHalo"));
 
-		chkShowCursorMarker  = new QCheckBox("Show cursor halo", page);
-		chkMarkerOnlyOnClick = new QCheckBox("Show only on click", page);
-		chkMarkerOnlyOnClick->setToolTip(
-			"When enabled, the halo flashes at the click position"
-			" instead of following the cursor continuously.");
+		chkShowCursorMarker  = new QCheckBox(T("Dialog.ShowCursorHalo"), page);
+		chkMarkerOnlyOnClick = new QCheckBox(T("Dialog.ShowOnlyOnClick"), page);
+		chkMarkerOnlyOnClick->setToolTip(T("Dialog.ShowOnlyOnClickTooltip"));
 
 		auto *haloFlagsRow = new QHBoxLayout;
 		haloFlagsRow->setSpacing(20);
@@ -403,31 +403,31 @@ void ZoominatorDialog::buildUi()
 		spMarkerSize = new QSpinBox(page);
 		spMarkerSize->setRange(6, 256);
 		spMarkerSize->setSingleStep(2);
-		spMarkerSize->setSuffix(" px");
+		spMarkerSize->setSuffix(T("Unit.Pixels"));
 
 		spMarkerThickness = new QSpinBox(page);
 		spMarkerThickness->setRange(1, 64);
 		spMarkerThickness->setSingleStep(1);
-		spMarkerThickness->setSuffix(" px");
+		spMarkerThickness->setSuffix(T("Unit.Pixels"));
 
 		btnMarkerColor = new QPushButton(page);
 		btnMarkerColor->setMinimumHeight(28);
 
 		auto *haloRow = new QHBoxLayout;
 		haloRow->setSpacing(12);
-		haloRow->addWidget(mkField("Halo Size",      spMarkerSize),      1);
-		haloRow->addWidget(mkField("Ring Thickness",  spMarkerThickness), 1);
-		haloRow->addWidget(mkField("Color",           btnMarkerColor),    1);
+		haloRow->addWidget(mkField(T("Dialog.HaloSize"), spMarkerSize), 1);
+		haloRow->addWidget(mkField(T("Dialog.RingThickness"), spMarkerThickness), 1);
+		haloRow->addWidget(mkField(T("Dialog.Color"), btnMarkerColor), 1);
 		lay->addLayout(haloRow);
 
 		
-		addSection(lay, "Developer");
+		addSection(lay, T("Dialog.Section.Developer"));
 
-		chkDebug = new QCheckBox("Enable debug logging", page);
+		chkDebug = new QCheckBox(T("Dialog.EnableDebugLogging"), page);
 		lay->addWidget(chkDebug);
 
 		lay->addStretch(1);
-		tabWidget->addTab(page, "Advanced");
+		tabWidget->addTab(page, T("Dialog.Tab.Advanced"));
 	}
 
 	
@@ -439,12 +439,7 @@ void ZoominatorDialog::buildUi()
 		lay->setContentsMargins(20, 20, 20, 20);
 		lay->setSpacing(10);
 
-		auto *info = new QLabel(
-			"<b>Check</b> sources to include in the zoom effect.<br>"
-			"<b>Uncheck</b> sources that should stay fixed &mdash; "
-			"e.g. a camera overlay or a watermark.<br>"
-			"The list stays in sync automatically as you add or remove sources.",
-			page);
+		auto *info = new QLabel(T("Dialog.SourcesHelp"), page);
 		info->setWordWrap(true);
 		lay->addWidget(info);
 
@@ -453,7 +448,7 @@ void ZoominatorDialog::buildUi()
 		lstSources->setSortingEnabled(false); 
 		lay->addWidget(lstSources, 1);
 
-		tabWidget->addTab(page, "Sources");
+		tabWidget->addTab(page, T("Dialog.Tab.Sources"));
 	}
 
 	
@@ -463,14 +458,14 @@ void ZoominatorDialog::buildUi()
 
 	lblStatus = new QLabel(this);
 	lblStatus->setWordWrap(true);
-	lblStatus->setText("Tip: Select the monitor that should drive the scene movement.");
+	lblStatus->setText(T("Dialog.StatusTip"));
 	root->addWidget(lblStatus);
 
 	auto *btnRow = new QHBoxLayout;
 	btnRow->setSpacing(8);
-	btnRefresh = new QPushButton("Refresh Lists", this);
-	btnApply   = new QPushButton("Apply", this);
-	btnTest    = new QPushButton("Test", this);
+	btnRefresh = new QPushButton(T("Dialog.RefreshLists"), this);
+	btnApply   = new QPushButton(T("Dialog.Apply"), this);
+	btnTest    = new QPushButton(T("Dialog.Test"), this);
 	btnRow->addWidget(btnRefresh);
 	btnRow->addStretch(1);
 	btnRow->addWidget(btnTest);
@@ -496,15 +491,15 @@ void ZoominatorDialog::populateSourcesTab()
 	
 	
 	
-	QSet<QString> excluded;
+	QSet<QString> included;
 	if (lstSources->count() > 0) {
 		for (int i = 0; i < lstSources->count(); i++) {
 			const QListWidgetItem *it = lstSources->item(i);
-			if (it && it->checkState() == Qt::Unchecked)
-				excluded.insert(it->data(Qt::UserRole).toString());
+			if (it && it->checkState() == Qt::Checked)
+				included.insert(it->data(Qt::UserRole).toString());
 		}
 	} else {
-		excluded = c.excludedSources;
+		included = c.includedSources;
 	}
 
 	lstSources->clear();
@@ -576,7 +571,7 @@ void ZoominatorDialog::populateSourcesTab()
 		auto *litem = new QListWidgetItem(label, lstSources);
 		litem->setData(Qt::UserRole, name);
 		litem->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
-		litem->setCheckState(excluded.contains(name) ? Qt::Unchecked : Qt::Checked);
+		litem->setCheckState(included.contains(name) ? Qt::Checked : Qt::Unchecked);
 	}
 }
 
@@ -586,7 +581,7 @@ void ZoominatorDialog::populateSources()
 
 	cmbSource->blockSignals(true);
 	cmbSource->clear();
-	cmbSource->addItem("(Select Screen)", "");
+	cmbSource->addItem(T("Dialog.SelectScreen"), "");
 
 	const auto screens = QGuiApplication::screens();
 	for (int i = 0; i < screens.size(); ++i) {
@@ -740,23 +735,24 @@ void ZoominatorDialog::applyToController()
 	c.debug = chkDebug->isChecked();
 
 	
-	c.excludedSources.clear();
+	c.includedSources.clear();
 	if (lstSources) {
 		for (int i = 0; i < lstSources->count(); i++) {
 			const QListWidgetItem *it = lstSources->item(i);
-			if (it && it->checkState() == Qt::Unchecked)
-				c.excludedSources.insert(it->data(Qt::UserRole).toString());
+			if (it && it->checkState() == Qt::Checked)
+				c.includedSources.insert(it->data(Qt::UserRole).toString());
 		}
 	}
 
 	c.saveSettings();
-	lblStatus->setText("Settings applied.");
+	c.rebuildRuntimeHooks();
+	lblStatus->setText(T("Dialog.SettingsApplied"));
 }
 
 void ZoominatorDialog::testZoom()
 {
 	applyToController();
-	lblStatus->setText("Use your configured trigger to test zoom.");
+	lblStatus->setText(T("Dialog.TestStatus"));
 }
 
 void ZoominatorDialog::clearHotkey()
@@ -792,7 +788,7 @@ void ZoominatorDialog::chooseMarkerColor()
 	                      : QColor(255, 0, 0).rgba();
 	const QColor picked = QColorDialog::getColor(
 		QColor::fromRgba(rgba), this,
-		"Pick Cursor Halo Color",
+		T("Dialog.PickCursorHaloColor"),
 		QColorDialog::ShowAlphaChannel);
 	if (picked.isValid())
 		updateMarkerColorButton(picked);

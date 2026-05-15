@@ -18,7 +18,7 @@ bool obs_module_load(void)
 
 	ZoominatorController::instance().initialize();
 
-	obs_frontend_add_tools_menu_item("Zoominator ...", open_dialog_cb, nullptr);
+	obs_frontend_add_tools_menu_item(obs_module_text("Menu.Tools.Zoominator"), open_dialog_cb, nullptr);
 	return true;
 }
 

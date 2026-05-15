@@ -156,7 +156,8 @@ ZoominatorController &ZoominatorController::instance()
 
 ZoominatorController::ZoominatorController()
 {
-	tickTimer.setInterval(33);
+	tickTimer.setInterval(16);
+	tickTimer.setTimerType(Qt::PreciseTimer);
 	connect(&tickTimer, &QTimer::timeout, this, &ZoominatorController::onTick);
 }
 
@@ -431,9 +432,8 @@ void ZoominatorController::frontendEventCallback(enum obs_frontend_event event, 
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING ||
 	    event == OBS_FRONTEND_EVENT_SCENE_COLLECTION_CHANGED ||
 	    event == OBS_FRONTEND_EVENT_SCENE_LIST_CHANGED) {
-		QTimer::singleShot(0, ctl, [ctl]() { cleanup_legacy_marker_items_all_scenes(ctl->markerSource); });
-		QTimer::singleShot(0, ctl, [ctl]() { ctl->requestRecoveryRestore(); });
-		QTimer::singleShot(500, ctl, [ctl]() { ctl->requestRecoveryRestore(); });
+		QTimer::singleShot(750, ctl, [ctl]() { ctl->requestRecoveryRestore(); });
+		QTimer::singleShot(3000, ctl, [ctl]() { cleanup_legacy_marker_items_all_scenes(ctl->markerSource); });
 	}
 }
 
@@ -472,11 +472,9 @@ void ZoominatorController::initialize()
 	loadSettings();
 	rebuildTriggersFromSettings();
 	obs_frontend_add_event_callback(frontendEventCallback, this);
-	QTimer::singleShot(0, this, [this]() { cleanup_legacy_marker_items_all_scenes(markerSource); });
-	QTimer::singleShot(0, this, [this]() { requestRecoveryRestore(); });
-	QTimer::singleShot(750, this, [this]() { requestRecoveryRestore(); });
-	QTimer::singleShot(2000, this, [this]() { requestRecoveryRestore(); });
-	installHooks();
+	QTimer::singleShot(1500, this, [this]() { installHooks(); });
+	QTimer::singleShot(3000, this, [this]() { requestRecoveryRestore(); });
+	QTimer::singleShot(5000, this, [this]() { cleanup_legacy_marker_items_all_scenes(markerSource); });
 }
 
 void ZoominatorController::shutdown()
@@ -707,20 +705,20 @@ void ZoominatorController::loadSettings()
 		debug = obs_data_get_bool(data, "debug");
 
 	
-	excludedSources.clear();
-	obs_data_array_t *exArr = obs_data_get_array(data, "excluded_sources");
-	if (exArr) {
-		const size_t exCount = obs_data_array_count(exArr);
-		for (size_t i = 0; i < exCount; i++) {
-			obs_data_t *exItem = obs_data_array_item(exArr, i);
-			if (exItem) {
-				const char *exName = obs_data_get_string(exItem, "name");
-				if (exName && *exName)
-					excludedSources.insert(QString::fromUtf8(exName));
-				obs_data_release(exItem);
+	includedSources.clear();
+	obs_data_array_t *incArr = obs_data_get_array(data, "included_sources");
+	if (incArr) {
+		const size_t incCount = obs_data_array_count(incArr);
+		for (size_t i = 0; i < incCount; i++) {
+			obs_data_t *incItem = obs_data_array_item(incArr, i);
+			if (incItem) {
+				const char *incName = obs_data_get_string(incItem, "name");
+				if (incName && *incName)
+					includedSources.insert(QString::fromUtf8(incName));
+				obs_data_release(incItem);
 			}
 		}
-		obs_data_array_release(exArr);
+		obs_data_array_release(incArr);
 	}
 
 	recoveryActive = obs_data_get_bool(data, "recovery_active");
@@ -784,15 +782,15 @@ void ZoominatorController::saveSettings()
 	obs_data_set_bool(data, "recovery_active", recoveryActive);
 	saveRecoveryMap(data);
 
-	obs_data_array_t *exArr = obs_data_array_create();
-	for (const QString &exName : excludedSources) {
-		obs_data_t *exItem = obs_data_create();
-		obs_data_set_string(exItem, "name", exName.toUtf8().constData());
-		obs_data_array_push_back(exArr, exItem);
-		obs_data_release(exItem);
+	obs_data_array_t *incArr = obs_data_array_create();
+	for (const QString &incName : includedSources) {
+		obs_data_t *incItem = obs_data_create();
+		obs_data_set_string(incItem, "name", incName.toUtf8().constData());
+		obs_data_array_push_back(incArr, incItem);
+		obs_data_release(incItem);
 	}
-	obs_data_set_array(data, "excluded_sources", exArr);
-	obs_data_array_release(exArr);
+	obs_data_set_array(data, "included_sources", incArr);
+	obs_data_array_release(incArr);
 
 	QByteArray pUtf8 = p.toUtf8();
 	obs_data_save_json_safe(data, pUtf8.constData(), "tmp", "bak");
@@ -802,6 +800,13 @@ void ZoominatorController::saveSettings()
 
 	rebuildTriggersFromSettings();
 	emit settingsChanged();
+}
+
+void ZoominatorController::rebuildRuntimeHooks()
+{
+	rebuildTriggersFromSettings();
+	uninstallHooks();
+	installHooks();
 }
 
 void ZoominatorController::ensureTicking(bool on)
@@ -885,7 +890,7 @@ void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sc
 
 	struct Ctx {
 		std::vector<obs_sceneitem_t *> *items = nullptr;
-		const QSet<QString> *excluded = nullptr;
+		const QSet<QString> *included = nullptr;
 
 		static bool is_marker_item(obs_sceneitem_t *item)
 		{
@@ -926,12 +931,12 @@ void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sc
 					}
 
 					
-					if (ctx->excluded && !ctx->excluded->isEmpty()) {
-						const char *srcName = obs_source_get_name(src);
-						if (srcName &&
-						    ctx->excluded->contains(QString::fromUtf8(srcName)))
-							return true;
-					}
+					if (!ctx->included || ctx->included->isEmpty())
+						return true;
+
+					const char *srcName = obs_source_get_name(src);
+					if (!srcName || !ctx->included->contains(QString::fromUtf8(srcName)))
+						return true;
 
 					ctx->items->push_back(item);
 					return true;
@@ -940,7 +945,7 @@ void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sc
 		}
 	};
 
-	Ctx ctx{&items, &excludedSources};
+	Ctx ctx{&items, &includedSources};
 	Ctx::enum_scene(scene, &ctx);
 }
 
@@ -2328,37 +2333,23 @@ void ZoominatorController::applyZoomToScene(double t)
 				const double dy = (double)my - (double)followY;
 				const double dist = std::sqrt(dx * dx + dy * dy);
 
-				// Smooth but responsive mouse-follow. The UI speed now controls both
-				// interpolation strength and the maximum travel per frame. Low speed gives
-				// cinematic drift; high speed follows quickly without snapping to raw mouse input.
 				const double effectiveSpeed = clampd(followSpeed, 0.25, 30.0);
-				const double deadZonePx = clampd(10.0 - effectiveSpeed * 0.22, 2.0, 10.0);
-				if (dist > deadZonePx) {
-					const double adjustedDist = dist - deadZonePx;
-					const double nx = dx / dist;
-					const double ny = dy / dist;
-
-					const double response = 1.0 - std::exp(-(1.8 + effectiveSpeed * 1.15) * tickDeltaSeconds);
-					double stepLen = adjustedDist * clampd(response, 0.02, 0.82);
-
-					const double maxPixelsPerSecond = 240.0 + effectiveSpeed * 185.0;
-					const double maxStep = maxPixelsPerSecond * tickDeltaSeconds;
-					if (stepLen > maxStep)
-						stepLen = maxStep;
-
-					followX = (float)((double)followX + nx * stepLen);
-					followY = (float)((double)followY + ny * stepLen);
+				if (dist > 0.01) {
+					const double response = 1.0 - std::exp(-(2.0 + effectiveSpeed * 1.35) * tickDeltaSeconds);
+					const double step = clampd(response, 0.01, 0.92);
+					followX = (float)((double)followX + dx * step);
+					followY = (float)((double)followY + dy * step);
 				}
 			}
 			fx = followX;
 			fy = followY;
-			anchorX = followX;
-			anchorY = followY;
+			anchorX = (float)centerX;
+			anchorY = (float)centerY;
 		} else if (followHasPos) {
 			fx = followX;
 			fy = followY;
-			anchorX = followX;
-			anchorY = followY;
+			anchorX = (float)centerX;
+			anchorY = (float)centerY;
 		}
 	} else {
 		if (!targetHasPos) {
@@ -2376,8 +2367,8 @@ void ZoominatorController::applyZoomToScene(double t)
 		}
 		fx = targetX;
 		fy = targetY;
-		anchorX = targetX;
-		anchorY = targetY;
+		anchorX = (float)centerX;
+		anchorY = (float)centerY;
 	}
 
 	if (showCursorMarker) {
@@ -3684,26 +3675,44 @@ void ZoominatorController::rebuildTriggersFromSettings()
 	}
 }
 
+bool ZoominatorController::needsKeyboardHook() const
+{
+	return triggerType == "keyboard" || followToggleHkValid;
+}
+
+bool ZoominatorController::needsMouseHook() const
+{
+	return triggerType == "mouse" || (showCursorMarker && markerOnlyOnClick);
+}
+
 void ZoominatorController::installHooks()
 {
+	if (!needsKeyboardHook() && !needsMouseHook())
+		return;
+
 #ifdef _WIN32
 	g_ctl = this;
 
-	if (!keyboardHook) {
+	if (needsKeyboardHook() && !keyboardHook) {
 		keyboardHook = (void *)SetWindowsHookExW(WH_KEYBOARD_LL, kb_hook_proc, GetModuleHandleW(nullptr), 0);
 	}
-	if (!mouseHook) {
+	if (needsMouseHook() && !mouseHook) {
 		mouseHook = (void *)SetWindowsHookExW(WH_MOUSE_LL, mouse_hook_proc, GetModuleHandleW(nullptr), 0);
 	}
 #elif defined(__APPLE__)
 	g_ctl = this;
 
 	if (!eventTap) {
-		CGEventMask mask = CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) |
-				   CGEventMaskBit(kCGEventFlagsChanged) | CGEventMaskBit(kCGEventLeftMouseDown) |
-				   CGEventMaskBit(kCGEventLeftMouseUp) | CGEventMaskBit(kCGEventRightMouseDown) |
-				   CGEventMaskBit(kCGEventRightMouseUp) | CGEventMaskBit(kCGEventOtherMouseDown) |
-				   CGEventMaskBit(kCGEventOtherMouseUp);
+		CGEventMask mask = 0;
+		if (needsKeyboardHook()) {
+			mask |= CGEventMaskBit(kCGEventKeyDown) | CGEventMaskBit(kCGEventKeyUp) |
+				CGEventMaskBit(kCGEventFlagsChanged);
+		}
+		if (needsMouseHook()) {
+			mask |= CGEventMaskBit(kCGEventLeftMouseDown) | CGEventMaskBit(kCGEventLeftMouseUp) |
+				CGEventMaskBit(kCGEventRightMouseDown) | CGEventMaskBit(kCGEventRightMouseUp) |
+				CGEventMaskBit(kCGEventOtherMouseDown) | CGEventMaskBit(kCGEventOtherMouseUp);
+		}
 		eventTap = CGEventTapCreate(kCGSessionEventTap, kCGHeadInsertEventTap, kCGEventTapOptionListenOnly, mask,
 					    eventTapCallback, this);
 		if (eventTap) {
@@ -3747,10 +3756,14 @@ void ZoominatorController::installHooks()
 		evmask.deviceid = XIAllMasterDevices;
 		evmask.mask_len = sizeof(mask_bits);
 		evmask.mask = mask_bits;
-		XISetMask(mask_bits, XI_RawKeyPress);
-		XISetMask(mask_bits, XI_RawKeyRelease);
-		XISetMask(mask_bits, XI_RawButtonPress);
-		XISetMask(mask_bits, XI_RawButtonRelease);
+		if (needsKeyboardHook()) {
+			XISetMask(mask_bits, XI_RawKeyPress);
+			XISetMask(mask_bits, XI_RawKeyRelease);
+		}
+		if (needsMouseHook()) {
+			XISetMask(mask_bits, XI_RawButtonPress);
+			XISetMask(mask_bits, XI_RawButtonRelease);
+		}
 		XISelectEvents(xiDisplay, DefaultRootWindow(xiDisplay), &evmask, 1);
 		XFlush(xiDisplay);
 
