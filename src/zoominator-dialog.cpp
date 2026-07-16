@@ -8,8 +8,10 @@
 extern "C" {
 struct calldata;
 struct signal_handler;
-void signal_handler_connect(struct signal_handler *handler, const char *signal, void (*callback)(void *, struct calldata *), void *data);
-void signal_handler_disconnect(struct signal_handler *handler, const char *signal, void (*callback)(void *, struct calldata *), void *data);
+void signal_handler_connect(struct signal_handler *handler, const char *signal,
+			    void (*callback)(void *, struct calldata *), void *data);
+void signal_handler_disconnect(struct signal_handler *handler, const char *signal,
+			       void (*callback)(void *, struct calldata *), void *data);
 }
 
 #include <QCheckBox>
@@ -104,29 +106,40 @@ static bool key_sequence_is_modifier_only(const QKeySequence &seq)
 
 static QString friendlySourceKind(const QString &kind)
 {
-	if (kind == "image_source")                                   return T("SourceKind.Image");
-	if (kind == "browser_source")                                 return T("SourceKind.Browser");
-	if (kind == "game_capture")                                   return T("SourceKind.GameCapture");
-	if (kind == "window_capture")                                 return T("SourceKind.WindowCapture");
-	if (kind == "monitor_capture" || kind == "display_capture" ||
-	    kind == "screen_capture")                                 return T("SourceKind.DisplayCapture");
-	if (kind == "dshow_input" || kind == "av_capture_input" ||
-	    kind == "video_capture_device")                           return T("SourceKind.VideoCapture");
-	if (kind == "wasapi_input_capture" ||
-	    kind == "coreaudio_input_capture")                        return T("SourceKind.AudioInput");
-	if (kind == "wasapi_output_capture" ||
-	    kind == "coreaudio_output_capture")                       return T("SourceKind.AudioOutput");
-	if (kind == "scene")                                          return T("SourceKind.Scene");
-	if (kind == "group")                                          return T("SourceKind.Group");
-	if (kind == "text_gdiplus" || kind == "text_ft2_source")     return T("SourceKind.Text");
-	if (kind == "color_source")                                   return T("SourceKind.Color");
-	if (kind == "ffmpeg_source")                                  return T("SourceKind.Media");
-	if (kind == "vlc_source")                                     return T("SourceKind.VlcMedia");
-	if (kind == "slideshow")                                      return T("SourceKind.ImageSlideshow");
-	return kind; 
+	if (kind == "image_source")
+		return T("SourceKind.Image");
+	if (kind == "browser_source")
+		return T("SourceKind.Browser");
+	if (kind == "game_capture")
+		return T("SourceKind.GameCapture");
+	if (kind == "window_capture")
+		return T("SourceKind.WindowCapture");
+	if (kind == "monitor_capture" || kind == "display_capture" || kind == "screen_capture")
+		return T("SourceKind.DisplayCapture");
+	if (kind == "dshow_input" || kind == "av_capture_input" || kind == "video_capture_device")
+		return T("SourceKind.VideoCapture");
+	if (kind == "wasapi_input_capture" || kind == "coreaudio_input_capture")
+		return T("SourceKind.AudioInput");
+	if (kind == "wasapi_output_capture" || kind == "coreaudio_output_capture")
+		return T("SourceKind.AudioOutput");
+	if (kind == "scene")
+		return T("SourceKind.Scene");
+	if (kind == "group")
+		return T("SourceKind.Group");
+	if (kind == "text_gdiplus" || kind == "text_ft2_source")
+		return T("SourceKind.Text");
+	if (kind == "color_source")
+		return T("SourceKind.Color");
+	if (kind == "ffmpeg_source")
+		return T("SourceKind.Media");
+	if (kind == "vlc_source")
+		return T("SourceKind.VlcMedia");
+	if (kind == "slideshow")
+		return T("SourceKind.ImageSlideshow");
+	return kind;
 }
 
-} 
+} // namespace
 
 ZoominatorDialog::ZoominatorDialog(QWidget *parent) : QDialog(parent)
 {
@@ -136,15 +149,12 @@ ZoominatorDialog::ZoominatorDialog(QWidget *parent) : QDialog(parent)
 
 	buildUi();
 
-	
 	obs_frontend_add_event_callback(frontend_event_cb, this);
 
-	
-	
 	auto *sh = obs_get_signal_handler();
-	signal_handler_connect(sh, "source_create",  &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_connect(sh, "source_create", &ZoominatorDialog::obsSourceChanged, this);
 	signal_handler_connect(sh, "source_destroy", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_connect(sh, "source_rename",  &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_connect(sh, "source_rename", &ZoominatorDialog::obsSourceChanged, this);
 
 	refreshLists();
 	loadFromController();
@@ -155,9 +165,9 @@ void ZoominatorDialog::closeEvent(QCloseEvent *event)
 	obs_frontend_remove_event_callback(frontend_event_cb, this);
 
 	auto *sh = obs_get_signal_handler();
-	signal_handler_disconnect(sh, "source_create",  &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_disconnect(sh, "source_create", &ZoominatorDialog::obsSourceChanged, this);
 	signal_handler_disconnect(sh, "source_destroy", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_disconnect(sh, "source_rename",  &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_disconnect(sh, "source_rename", &ZoominatorDialog::obsSourceChanged, this);
 
 	applyToController();
 	QDialog::closeEvent(event);
@@ -178,34 +188,28 @@ void ZoominatorDialog::buildUi()
 
 	tabWidget = new QTabWidget(this);
 
-	
-	
-	
 	{
 		auto *page = new QWidget;
-		auto *lay  = new QVBoxLayout(page);
+		auto *lay = new QVBoxLayout(page);
 		lay->setContentsMargins(20, 20, 20, 20);
 		lay->setSpacing(0);
 
-		
 		cmbSource = new QComboBox(page);
 		lay->addWidget(mkField(T("Dialog.TargetScreen"), cmbSource));
 		lay->addSpacing(16);
 
-		
 		cmbMode = new QComboBox(page);
 		cmbMode->addItem(T("Dialog.Mode.Hold"), "hold");
 		cmbMode->addItem(T("Dialog.Mode.Toggle"), "toggle");
 		lay->addWidget(mkField(T("Dialog.Behavior"), cmbMode));
 		lay->addSpacing(16);
 
-		
 		auto *followHkRow = new QWidget(page);
 		{
 			auto *h = new QHBoxLayout(followHkRow);
 			h->setContentsMargins(0, 0, 0, 0);
 			h->setSpacing(6);
-			editFollowToggleHotkey     = new QKeySequenceEdit(followHkRow);
+			editFollowToggleHotkey = new QKeySequenceEdit(followHkRow);
 			btnClearFollowToggleHotkey = new QPushButton(T("Dialog.Clear"), followHkRow);
 			btnClearFollowToggleHotkey->setToolTip(T("Dialog.ClearFollowToggleTooltip"));
 			h->addWidget(editFollowToggleHotkey, 1);
@@ -217,23 +221,18 @@ void ZoominatorDialog::buildUi()
 		tabWidget->addTab(page, T("Dialog.Tab.Target"));
 	}
 
-	
-	
-	
 	{
 		auto *page = new QWidget;
-		auto *lay  = new QVBoxLayout(page);
+		auto *lay = new QVBoxLayout(page);
 		lay->setContentsMargins(20, 20, 20, 20);
 		lay->setSpacing(0);
 
-		
 		cmbTrigger = new QComboBox(page);
 		cmbTrigger->addItem(T("Dialog.Trigger.Keyboard"), "keyboard");
 		cmbTrigger->addItem(T("Dialog.Trigger.MouseButton"), "mouse");
 		lay->addWidget(mkField(T("Dialog.TriggerType"), cmbTrigger));
 		lay->addSpacing(16);
 
-		
 		rowHotkeyWidget = new QWidget(page);
 		{
 			auto *v = new QVBoxLayout(rowHotkeyWidget);
@@ -242,7 +241,7 @@ void ZoominatorDialog::buildUi()
 			v->addWidget(new QLabel(T("Dialog.Hotkey"), rowHotkeyWidget));
 			auto *h = new QHBoxLayout;
 			h->setSpacing(6);
-			editHotkey    = new QKeySequenceEdit(rowHotkeyWidget);
+			editHotkey = new QKeySequenceEdit(rowHotkeyWidget);
 			btnClearHotkey = new QPushButton(T("Dialog.Clear"), rowHotkeyWidget);
 			btnClearHotkey->setToolTip(T("Dialog.ClearHotkeyTooltip"));
 			h->addWidget(editHotkey, 1);
@@ -251,7 +250,6 @@ void ZoominatorDialog::buildUi()
 		}
 		lay->addWidget(rowHotkeyWidget);
 
-		
 		rowMouseWidget = new QWidget(page);
 		{
 			auto *v = new QVBoxLayout(rowMouseWidget);
@@ -259,17 +257,16 @@ void ZoominatorDialog::buildUi()
 			v->setSpacing(4);
 			v->addWidget(new QLabel(T("Dialog.MouseButton"), rowMouseWidget));
 			cmbMouseBtn = new QComboBox(rowMouseWidget);
-			cmbMouseBtn->addItem(T("Dialog.Mouse.Left"),   "left");
-			cmbMouseBtn->addItem(T("Dialog.Mouse.Right"),  "right");
+			cmbMouseBtn->addItem(T("Dialog.Mouse.Left"), "left");
+			cmbMouseBtn->addItem(T("Dialog.Mouse.Right"), "right");
 			cmbMouseBtn->addItem(T("Dialog.Mouse.Middle"), "middle");
-			cmbMouseBtn->addItem("X1",     "x1");
-			cmbMouseBtn->addItem("X2",     "x2");
+			cmbMouseBtn->addItem("X1", "x1");
+			cmbMouseBtn->addItem("X2", "x2");
 			v->addWidget(cmbMouseBtn);
 		}
 		lay->addWidget(rowMouseWidget);
 		lay->addSpacing(16);
 
-		
 		rowModifiersWidget = new QWidget(page);
 		{
 			auto *v = new QVBoxLayout(rowModifiersWidget);
@@ -279,25 +276,31 @@ void ZoominatorDialog::buildUi()
 			auto *grid = new QGridLayout;
 			grid->setHorizontalSpacing(10);
 			grid->setVerticalSpacing(4);
-			chkCtrl       = new QCheckBox(T("Dialog.Mod.CtrlAny"),     rowModifiersWidget);
-			chkLeftCtrl   = new QCheckBox(T("Dialog.Mod.LeftCtrl"),    rowModifiersWidget);
-			chkRightCtrl  = new QCheckBox(T("Dialog.Mod.RightCtrl"),   rowModifiersWidget);
-			chkAlt        = new QCheckBox(T("Dialog.Mod.AltAny"),      rowModifiersWidget);
-			chkLeftAlt    = new QCheckBox(T("Dialog.Mod.LeftAlt"),     rowModifiersWidget);
-			chkRightAlt   = new QCheckBox(T("Dialog.Mod.RightAlt"),    rowModifiersWidget);
-			chkShift      = new QCheckBox(T("Dialog.Mod.ShiftAny"),    rowModifiersWidget);
-			chkLeftShift  = new QCheckBox(T("Dialog.Mod.LeftShift"),   rowModifiersWidget);
-			chkRightShift = new QCheckBox(T("Dialog.Mod.RightShift"),  rowModifiersWidget);
-			chkWin        = new QCheckBox(T("Dialog.Mod.MetaWinAny"),  rowModifiersWidget);
-			chkLeftWin    = new QCheckBox(T("Dialog.Mod.LeftMetaWin"), rowModifiersWidget);
-			chkRightWin   = new QCheckBox(T("Dialog.Mod.RightMetaWin"), rowModifiersWidget);
-			grid->addWidget(chkCtrl,       0, 0); grid->addWidget(chkLeftCtrl,   0, 1); grid->addWidget(chkRightCtrl,  0, 2);
-			grid->addWidget(chkAlt,        1, 0); grid->addWidget(chkLeftAlt,    1, 1); grid->addWidget(chkRightAlt,   1, 2);
-			grid->addWidget(chkShift,      2, 0); grid->addWidget(chkLeftShift,  2, 1); grid->addWidget(chkRightShift, 2, 2);
-			grid->addWidget(chkWin,        3, 0); grid->addWidget(chkLeftWin,    3, 1); grid->addWidget(chkRightWin,   3, 2);
-			grid->addWidget(
-				new QLabel(T("Dialog.ModifierHelp"), rowModifiersWidget),
-				4, 0, 1, 3);
+			chkCtrl = new QCheckBox(T("Dialog.Mod.CtrlAny"), rowModifiersWidget);
+			chkLeftCtrl = new QCheckBox(T("Dialog.Mod.LeftCtrl"), rowModifiersWidget);
+			chkRightCtrl = new QCheckBox(T("Dialog.Mod.RightCtrl"), rowModifiersWidget);
+			chkAlt = new QCheckBox(T("Dialog.Mod.AltAny"), rowModifiersWidget);
+			chkLeftAlt = new QCheckBox(T("Dialog.Mod.LeftAlt"), rowModifiersWidget);
+			chkRightAlt = new QCheckBox(T("Dialog.Mod.RightAlt"), rowModifiersWidget);
+			chkShift = new QCheckBox(T("Dialog.Mod.ShiftAny"), rowModifiersWidget);
+			chkLeftShift = new QCheckBox(T("Dialog.Mod.LeftShift"), rowModifiersWidget);
+			chkRightShift = new QCheckBox(T("Dialog.Mod.RightShift"), rowModifiersWidget);
+			chkWin = new QCheckBox(T("Dialog.Mod.MetaWinAny"), rowModifiersWidget);
+			chkLeftWin = new QCheckBox(T("Dialog.Mod.LeftMetaWin"), rowModifiersWidget);
+			chkRightWin = new QCheckBox(T("Dialog.Mod.RightMetaWin"), rowModifiersWidget);
+			grid->addWidget(chkCtrl, 0, 0);
+			grid->addWidget(chkLeftCtrl, 0, 1);
+			grid->addWidget(chkRightCtrl, 0, 2);
+			grid->addWidget(chkAlt, 1, 0);
+			grid->addWidget(chkLeftAlt, 1, 1);
+			grid->addWidget(chkRightAlt, 1, 2);
+			grid->addWidget(chkShift, 2, 0);
+			grid->addWidget(chkLeftShift, 2, 1);
+			grid->addWidget(chkRightShift, 2, 2);
+			grid->addWidget(chkWin, 3, 0);
+			grid->addWidget(chkLeftWin, 3, 1);
+			grid->addWidget(chkRightWin, 3, 2);
+			grid->addWidget(new QLabel(T("Dialog.ModifierHelp"), rowModifiersWidget), 4, 0, 1, 3);
 			grid->setColumnStretch(3, 1);
 			v->addLayout(grid);
 		}
@@ -306,7 +309,6 @@ void ZoominatorDialog::buildUi()
 		lay->addStretch(1);
 		tabWidget->addTab(page, T("Dialog.Tab.Trigger"));
 
-		
 		connect(cmbTrigger, &QComboBox::currentIndexChanged, this, [this](int) {
 			const bool isMouse = (cmbTrigger->currentData().toString() == "mouse");
 			rowHotkeyWidget->setVisible(!isMouse);
@@ -315,19 +317,14 @@ void ZoominatorDialog::buildUi()
 		});
 	}
 
-	
-	
-	
 	{
 		auto *page = new QWidget;
-		auto *lay  = new QVBoxLayout(page);
+		auto *lay = new QVBoxLayout(page);
 		lay->setContentsMargins(20, 8, 20, 20);
 		lay->setSpacing(0);
 
-		
 		addSection(lay, T("Dialog.Section.Zoom"), true);
 
-		
 		spZoom = new QDoubleSpinBox(page);
 		spZoom->setRange(0.0, 8.0);
 		spZoom->setSingleStep(0.05);
@@ -351,7 +348,6 @@ void ZoominatorDialog::buildUi()
 		zoomRow->addWidget(mkField(T("Dialog.AnimateOut"), spOut), 1);
 		lay->addLayout(zoomRow);
 
-		
 		addSection(lay, T("Dialog.Section.MouseFollow"));
 
 		chkFollow = new QCheckBox(T("Dialog.Enable"), page);
@@ -362,9 +358,19 @@ void ZoominatorDialog::buildUi()
 		spFollowSpeed->setSingleStep(0.5);
 		spFollowSpeed->setDecimals(1);
 
+		chkCenterCursorUntilEdge = new QCheckBox(T("Dialog.CenterCursorUntilEdge"), page);
+		chkCenterCursorUntilEdge->setToolTip(T("Dialog.CenterCursorUntilEdgeTooltip"));
+
+		spMouseIdleTimeout = new QSpinBox(page);
+		spMouseIdleTimeout->setRange(0, 60000);
+		spMouseIdleTimeout->setSingleStep(100);
+		spMouseIdleTimeout->setSuffix(T("Unit.Milliseconds"));
+		spMouseIdleTimeout->setSpecialValueText(T("Dialog.Disabled"));
+		spMouseIdleTimeout->setToolTip(T("Dialog.MouseIdleTimeoutTooltip"));
+
 		auto *followRow = new QHBoxLayout;
 		followRow->setSpacing(12);
-		
+
 		auto *followEnableW = new QWidget(page);
 		{
 			auto *v = new QVBoxLayout(followEnableW);
@@ -375,27 +381,24 @@ void ZoominatorDialog::buildUi()
 		}
 		followRow->addWidget(followEnableW, 1);
 		followRow->addWidget(mkField(T("Dialog.SmoothingSpeed"), spFollowSpeed), 1);
-		followRow->addStretch(1);
+		followRow->addWidget(mkField(T("Dialog.MouseIdleTimeout"), spMouseIdleTimeout), 1);
 		lay->addLayout(followRow);
+		lay->addWidget(chkCenterCursorUntilEdge);
 
-		
 		addSection(lay, T("Dialog.Section.Canvas"));
 
 		chkPortraitCover = new QCheckBox(T("Dialog.PortraitCover"), page);
 		chkPortraitCover->setToolTip(T("Dialog.PortraitCoverTooltip"));
 		lay->addWidget(chkPortraitCover);
 
-		
 		addSection(lay, T("Dialog.Section.CursorHalo"));
 
-		chkShowCursorMarker  = new QCheckBox(T("Dialog.ShowCursorHalo"), page);
-		chkMarkerOnlyOnClick = new QCheckBox(T("Dialog.ShowOnlyOnClick"), page);
-		chkMarkerOnlyOnClick->setToolTip(T("Dialog.ShowOnlyOnClickTooltip"));
+		chkShowCursorMarker = new QCheckBox(T("Dialog.ShowCursorHalo"), page);
+		chkShowCursorMarker->setToolTip(T("Dialog.ShowCursorHaloTooltip"));
 
 		auto *haloFlagsRow = new QHBoxLayout;
 		haloFlagsRow->setSpacing(20);
 		haloFlagsRow->addWidget(chkShowCursorMarker);
-		haloFlagsRow->addWidget(chkMarkerOnlyOnClick);
 		haloFlagsRow->addStretch(1);
 		lay->addLayout(haloFlagsRow);
 		lay->addSpacing(10);
@@ -420,7 +423,6 @@ void ZoominatorDialog::buildUi()
 		haloRow->addWidget(mkField(T("Dialog.Color"), btnMarkerColor), 1);
 		lay->addLayout(haloRow);
 
-		
 		addSection(lay, T("Dialog.Section.Developer"));
 
 		chkDebug = new QCheckBox(T("Dialog.EnableDebugLogging"), page);
@@ -430,12 +432,9 @@ void ZoominatorDialog::buildUi()
 		tabWidget->addTab(page, T("Dialog.Tab.Advanced"));
 	}
 
-	
-	
-	
 	{
 		auto *page = new QWidget;
-		auto *lay  = new QVBoxLayout(page);
+		auto *lay = new QVBoxLayout(page);
 		lay->setContentsMargins(20, 20, 20, 20);
 		lay->setSpacing(10);
 
@@ -445,15 +444,12 @@ void ZoominatorDialog::buildUi()
 
 		lstSources = new QListWidget(page);
 		lstSources->setAlternatingRowColors(true);
-		lstSources->setSortingEnabled(false); 
+		lstSources->setSortingEnabled(false);
 		lay->addWidget(lstSources, 1);
 
 		tabWidget->addTab(page, T("Dialog.Tab.Sources"));
 	}
 
-	
-	
-	
 	root->addWidget(tabWidget, 1);
 
 	lblStatus = new QLabel(this);
@@ -464,21 +460,20 @@ void ZoominatorDialog::buildUi()
 	auto *btnRow = new QHBoxLayout;
 	btnRow->setSpacing(8);
 	btnRefresh = new QPushButton(T("Dialog.RefreshLists"), this);
-	btnApply   = new QPushButton(T("Dialog.Apply"), this);
-	btnTest    = new QPushButton(T("Dialog.Test"), this);
+	btnApply = new QPushButton(T("Dialog.Apply"), this);
+	btnTest = new QPushButton(T("Dialog.Test"), this);
 	btnRow->addWidget(btnRefresh);
 	btnRow->addStretch(1);
 	btnRow->addWidget(btnTest);
 	btnRow->addWidget(btnApply);
 	root->addLayout(btnRow);
 
-	
 	connect(btnRefresh, &QPushButton::clicked, this, &ZoominatorDialog::refreshLists);
-	connect(btnApply,   &QPushButton::clicked, this, &ZoominatorDialog::applyToController);
-	connect(btnTest,    &QPushButton::clicked, this, &ZoominatorDialog::testZoom);
-	connect(btnClearHotkey,             &QPushButton::clicked, this, &ZoominatorDialog::clearHotkey);
+	connect(btnApply, &QPushButton::clicked, this, &ZoominatorDialog::applyToController);
+	connect(btnTest, &QPushButton::clicked, this, &ZoominatorDialog::testZoom);
+	connect(btnClearHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearHotkey);
 	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearFollowToggleHotkey);
-	connect(btnMarkerColor,             &QPushButton::clicked, this, &ZoominatorDialog::chooseMarkerColor);
+	connect(btnMarkerColor, &QPushButton::clicked, this, &ZoominatorDialog::chooseMarkerColor);
 }
 
 void ZoominatorDialog::populateSourcesTab()
@@ -488,9 +483,6 @@ void ZoominatorDialog::populateSourcesTab()
 
 	auto &c = ZoominatorController::instance();
 
-	
-	
-	
 	QSet<QString> included;
 	if (lstSources->count() > 0) {
 		for (int i = 0; i < lstSources->count(); i++) {
@@ -504,9 +496,8 @@ void ZoominatorDialog::populateSourcesTab()
 
 	lstSources->clear();
 
-	
 	struct Collector {
-		QMap<QString, QString> *map = nullptr; 
+		QMap<QString, QString> *map = nullptr;
 
 		static void visitScene(obs_scene_t *scene, Collector *col)
 		{
@@ -536,7 +527,6 @@ void ZoominatorDialog::populateSourcesTab()
 						col2->map->insert(qname, id ? QString::fromUtf8(id) : QString());
 					}
 
-					
 					if (obs_scene_t *sub = obs_scene_from_source(src))
 						Collector::visitScene(sub, col2);
 
@@ -563,10 +553,8 @@ void ZoominatorDialog::populateSourcesTab()
 	names.sort(Qt::CaseInsensitive);
 
 	for (const QString &name : names) {
-		const QString kind  = friendlySourceKind(sourceMap.value(name));
-		const QString label = kind.isEmpty()
-		                        ? name
-		                        : QStringLiteral("%1  [%2]").arg(name, kind);
+		const QString kind = friendlySourceKind(sourceMap.value(name));
+		const QString label = kind.isEmpty() ? name : QStringLiteral("%1  [%2]").arg(name, kind);
 
 		auto *litem = new QListWidgetItem(label, lstSources);
 		litem->setData(Qt::UserRole, name);
@@ -589,12 +577,13 @@ void ZoominatorDialog::populateSources()
 		if (!screen)
 			continue;
 		const QRect g = screen->geometry();
-		const QString key = QStringLiteral("%1,%2,%3,%4")
-		                        .arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height());
+		const QString key = QStringLiteral("%1,%2,%3,%4").arg(g.x()).arg(g.y()).arg(g.width()).arg(g.height());
 		const QString label = QStringLiteral("%1: %2×%3 @ (%4, %5)")
-		                          .arg(screen->name())
-		                          .arg(g.width()).arg(g.height())
-		                          .arg(g.x()).arg(g.y());
+					      .arg(screen->name())
+					      .arg(g.width())
+					      .arg(g.height())
+					      .arg(g.x())
+					      .arg(g.y());
 		cmbSource->addItem(label, key);
 	}
 
@@ -620,7 +609,6 @@ void ZoominatorDialog::loadFromController()
 
 	refreshLists();
 
-	
 	{
 		int idx = cmbSource->findData(c.screenKey);
 		if (idx >= 0)
@@ -633,7 +621,6 @@ void ZoominatorDialog::loadFromController()
 		editFollowToggleHotkey->setKeySequence(QKeySequence(c.followToggleHotkeySequence));
 	}
 
-	
 	{
 		int idx = cmbTrigger->findData(c.triggerType);
 		if (idx >= 0)
@@ -643,10 +630,14 @@ void ZoominatorDialog::loadFromController()
 		if (idx >= 0)
 			cmbMouseBtn->setCurrentIndex(idx);
 
-		chkCtrl->setChecked(c.modCtrl);         chkLeftCtrl->setChecked(c.modLeftCtrl);
-		chkAlt->setChecked(c.modAlt);           chkLeftAlt->setChecked(c.modLeftAlt);
-		chkShift->setChecked(c.modShift);       chkLeftShift->setChecked(c.modLeftShift);
-		chkWin->setChecked(c.modWin);           chkLeftWin->setChecked(c.modLeftWin);
+		chkCtrl->setChecked(c.modCtrl);
+		chkLeftCtrl->setChecked(c.modLeftCtrl);
+		chkAlt->setChecked(c.modAlt);
+		chkLeftAlt->setChecked(c.modLeftAlt);
+		chkShift->setChecked(c.modShift);
+		chkLeftShift->setChecked(c.modLeftShift);
+		chkWin->setChecked(c.modWin);
+		chkLeftWin->setChecked(c.modLeftWin);
 		chkRightCtrl->setChecked(c.modRightCtrl);
 		chkRightAlt->setChecked(c.modRightAlt);
 		chkRightShift->setChecked(c.modRightShift);
@@ -660,23 +651,22 @@ void ZoominatorDialog::loadFromController()
 		rowModifiersWidget->setVisible(isMouse);
 	}
 
-	
 	{
 		spZoom->setValue(c.zoomFactor);
 		spIn->setValue(c.animInMs);
 		spOut->setValue(c.animOutMs);
 		chkFollow->setChecked(c.followMouse);
 		spFollowSpeed->setValue(c.followSpeed);
+		chkCenterCursorUntilEdge->setChecked(c.centerCursorUntilEdge);
+		spMouseIdleTimeout->setValue(c.mouseIdleTimeoutMs);
 		chkPortraitCover->setChecked(c.portraitCover);
 		chkShowCursorMarker->setChecked(c.showCursorMarker);
-		chkMarkerOnlyOnClick->setChecked(c.markerOnlyOnClick);
 		spMarkerSize->setValue(c.markerSize);
 		spMarkerThickness->setValue(c.markerThickness);
 		updateMarkerColorButton(QColor::fromRgba(c.markerColor));
 		chkDebug->setChecked(c.debug);
 	}
 
-	
 	if (lstSources)
 		lstSources->clear();
 	populateSourcesTab();
@@ -691,50 +681,50 @@ void ZoominatorDialog::applyToController()
 
 	auto &c = ZoominatorController::instance();
 
-	
-	c.screenKey   = cmbSource->currentData().toString();
-	c.hotkeyMode  = cmbMode->currentData().toString();
-	c.followToggleHotkeySequence =
-		editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
+	c.screenKey = cmbSource->currentData().toString();
+	c.hotkeyMode = cmbMode->currentData().toString();
+	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
 
-	
 	c.triggerType = cmbTrigger->currentData().toString();
 	c.mouseButton = cmbMouseBtn->currentData().toString();
 
-	c.modCtrl  = chkCtrl->isChecked();   c.modLeftCtrl  = chkLeftCtrl->isChecked();
-	c.modAlt   = chkAlt->isChecked();    c.modLeftAlt   = chkLeftAlt->isChecked();
-	c.modShift = chkShift->isChecked();  c.modLeftShift = chkLeftShift->isChecked();
-	c.modWin   = chkWin->isChecked();    c.modLeftWin   = chkLeftWin->isChecked();
-	c.modRightCtrl  = chkRightCtrl->isChecked();
-	c.modRightAlt   = chkRightAlt->isChecked();
+	c.modCtrl = chkCtrl->isChecked();
+	c.modLeftCtrl = chkLeftCtrl->isChecked();
+	c.modAlt = chkAlt->isChecked();
+	c.modLeftAlt = chkLeftAlt->isChecked();
+	c.modShift = chkShift->isChecked();
+	c.modLeftShift = chkLeftShift->isChecked();
+	c.modWin = chkWin->isChecked();
+	c.modLeftWin = chkLeftWin->isChecked();
+	c.modRightCtrl = chkRightCtrl->isChecked();
+	c.modRightAlt = chkRightAlt->isChecked();
 	c.modRightShift = chkRightShift->isChecked();
-	c.modRightWin   = chkRightWin->isChecked();
+	c.modRightWin = chkRightWin->isChecked();
 
 	QKeySequence triggerSequence = editHotkey->keySequence();
 	if (!key_sequence_is_modifier_only(triggerSequence) &&
-	    (c.modCtrl || c.modAlt || c.modShift || c.modWin ||
-	     c.modLeftCtrl || c.modRightCtrl || c.modLeftAlt || c.modRightAlt ||
-	     c.modLeftShift || c.modRightShift || c.modLeftWin || c.modRightWin)) {
+	    (c.modCtrl || c.modAlt || c.modShift || c.modWin || c.modLeftCtrl || c.modRightCtrl || c.modLeftAlt ||
+	     c.modRightAlt || c.modLeftShift || c.modRightShift || c.modLeftWin || c.modRightWin)) {
 		triggerSequence = sequence_without_modifiers(triggerSequence);
 	}
 	c.hotkeySequence = triggerSequence.toString(QKeySequence::NativeText);
 
-	
-	c.zoomFactor        = spZoom->value();
-	c.animInMs          = spIn->value();
-	c.animOutMs         = spOut->value();
-	c.followMouse       = chkFollow->isChecked();
-	c.followSpeed       = spFollowSpeed->value();
-	c.portraitCover     = chkPortraitCover->isChecked();
-	c.showCursorMarker  = chkShowCursorMarker->isChecked();
-	c.markerOnlyOnClick = chkMarkerOnlyOnClick->isChecked();
-	c.markerSize        = spMarkerSize->value();
-	c.markerThickness   = spMarkerThickness->value();
+	c.zoomFactor = spZoom->value();
+	c.animInMs = spIn->value();
+	c.animOutMs = spOut->value();
+	c.followMouse = chkFollow->isChecked();
+	c.followSpeed = spFollowSpeed->value();
+	c.centerCursorUntilEdge = chkCenterCursorUntilEdge->isChecked();
+	c.mouseIdleTimeoutMs = spMouseIdleTimeout->value();
+	c.portraitCover = chkPortraitCover->isChecked();
+	c.showCursorMarker = chkShowCursorMarker->isChecked();
+	c.markerOnlyOnClick = true;
+	c.markerSize = spMarkerSize->value();
+	c.markerThickness = spMarkerThickness->value();
 	if (btnMarkerColor)
 		c.markerColor = (uint32_t)btnMarkerColor->property("markerRgba").toUInt();
 	c.debug = chkDebug->isChecked();
 
-	
 	c.includedSources.clear();
 	if (lstSources) {
 		for (int i = 0; i < lstSources->count(); i++) {
@@ -771,25 +761,18 @@ void ZoominatorDialog::updateMarkerColorButton(const QColor &color)
 		return;
 	const QColor c = color.isValid() ? color : QColor(255, 0, 0);
 	btnMarkerColor->setProperty("markerRgba", c.rgba());
-	btnMarkerColor->setText(
-		QStringLiteral("%1 / %2 / %3").arg(c.red()).arg(c.green()).arg(c.blue()));
-	btnMarkerColor->setStyleSheet(
-		QStringLiteral(
-			"QPushButton { background:%1; color:%2;"
-			" border:1px solid palette(mid); padding:4px 8px; }")
-			.arg(c.name(QColor::HexArgb))
-			.arg(c.lightness() < 128 ? "#ffffff" : "#000000"));
+	btnMarkerColor->setText(QStringLiteral("%1 / %2 / %3").arg(c.red()).arg(c.green()).arg(c.blue()));
+	btnMarkerColor->setStyleSheet(QStringLiteral("QPushButton { background:%1; color:%2;"
+						     " border:1px solid palette(mid); padding:4px 8px; }")
+					      .arg(c.name(QColor::HexArgb))
+					      .arg(c.lightness() < 128 ? "#ffffff" : "#000000"));
 }
 
 void ZoominatorDialog::chooseMarkerColor()
 {
-	const uint rgba = btnMarkerColor
-	                      ? btnMarkerColor->property("markerRgba").toUInt()
-	                      : QColor(255, 0, 0).rgba();
-	const QColor picked = QColorDialog::getColor(
-		QColor::fromRgba(rgba), this,
-		T("Dialog.PickCursorHaloColor"),
-		QColorDialog::ShowAlphaChannel);
+	const uint rgba = btnMarkerColor ? btnMarkerColor->property("markerRgba").toUInt() : QColor(255, 0, 0).rgba();
+	const QColor picked = QColorDialog::getColor(QColor::fromRgba(rgba), this, T("Dialog.PickCursorHaloColor"),
+						     QColorDialog::ShowAlphaChannel);
 	if (picked.isValid())
 		updateMarkerColorButton(picked);
 }

@@ -19,8 +19,14 @@ It operates at the **scene level**, meaning it works with any source automatical
 - **Mouse-Driven Focus**  
   Keeps attention exactly where your cursor is.
 
+- **Ultrawide Edge Tracking**
+  Optionally keeps the cursor centered until the captured scene reaches an edge.
+
+- **Idle Freeze**
+  Pauses mouse following after a configurable idle timeout and resumes on movement.
+
 - **Click Highlight (Halo)**  
-  Optional visual feedback on mouse clicks using a configurable halo.
+  Optional click-only visual feedback using a configurable halo.
 
 - **Flexible Activation**  
   Toggle or hold behavior with customizable key combinations.
@@ -75,7 +81,10 @@ cmake --build . --config Release
 - **Windows:** Full support (global input + smooth tracking)
 - **macOS:** Requires Accessibility permissions for input tracking
 - **Linux (X11):** Supported via XInput2
-- **Wayland:** Limited (no global cursor tracking)
+- **Wayland:** Native sessions are detected and X11 hooks are disabled. The
+  Global Shortcuts portal can support hotkeys, but Wayland currently has no
+  standard passive global cursor-position portal, so full mouse tracking still
+  requires compositor-specific input capture support.
 
 ---
 

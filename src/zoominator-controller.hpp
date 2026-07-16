@@ -15,12 +15,12 @@
 #include <vector>
 
 #ifdef _WIN32
-#	define WIN32_LEAN_AND_MEAN
-#	include <Windows.h>
-#	undef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#undef WIN32_LEAN_AND_MEAN
 #elif defined(__APPLE__)
-#	include <CoreFoundation/CoreFoundation.h>
-#	include <CoreGraphics/CoreGraphics.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <CoreGraphics/CoreGraphics.h>
 #elif defined(__linux__)
 
 struct _XDisplay;
@@ -47,8 +47,8 @@ public:
 	QString hotkeyMode;
 	QString followToggleHotkeySequence;
 
-	QString triggerType;       
-	QString mouseButton;       
+	QString triggerType;
+	QString mouseButton;
 	bool modCtrl = false;
 	bool modAlt = false;
 	bool modShift = false;
@@ -67,17 +67,17 @@ public:
 	int animOutMs = 180;
 	bool followMouse = true;
 	bool followMouseRuntimeEnabled = true;
-	double followSpeed = 8.0; 
+	double followSpeed = 8.0;
+	bool centerCursorUntilEdge = true;
+	int mouseIdleTimeoutMs = 0;
 	bool portraitCover = true;
 	bool showCursorMarker = false;
-	bool markerOnlyOnClick = false;
+	bool markerOnlyOnClick = true;
 	uint32_t markerColor = 0xFFFF0000;
 	int markerSize = 26;
 	int markerThickness = 4;
 	bool debug = false;
 
-	
-	
 	QSet<QString> includedSources;
 
 signals:
@@ -146,6 +146,11 @@ private:
 	bool followHasPos = false;
 	float followX = 0.0f;
 	float followY = 0.0f;
+	bool lastCursorSampleValid = false;
+	float lastCursorSampleX = 0.0f;
+	float lastCursorSampleY = 0.0f;
+	qint64 lastCursorMovementMs = 0;
+	bool mouseTrackingIdle = false;
 
 	bool targetHasPos = false;
 	double tickDeltaSeconds = 1.0 / 60.0;
@@ -231,8 +236,7 @@ private:
 	void *keyboardHook = nullptr;
 	void *mouseHook = nullptr;
 #elif defined(__APPLE__)
-	static CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type,
-					   CGEventRef event, void *refcon);
+	static CGEventRef eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *refcon);
 	CFMachPortRef eventTap = nullptr;
 	CFRunLoopSourceRef runLoopSource = nullptr;
 #elif defined(__linux__)
