@@ -27,13 +27,13 @@ private slots:
 	void refreshLists();
 	void applyToController();
 	void testZoom();
-	void clearHotkey();
 	void clearFollowToggleHotkey();
 	void chooseMarkerColor();
 	void populateSourcesTab();
 
 private:
 	void buildUi();
+	void buildZoomLevelsTab();
 	void loadFromController();
 	void populateSources();
 	void updateMarkerColorButton(const QColor &color);
@@ -43,30 +43,18 @@ private:
 	QTabWidget *tabWidget = nullptr;
 
 	QComboBox *cmbSource = nullptr;
-	QComboBox *cmbMode = nullptr;
 	QKeySequenceEdit *editFollowToggleHotkey = nullptr;
 	QPushButton *btnClearFollowToggleHotkey = nullptr;
 
-	QComboBox *cmbTrigger = nullptr;
-	QKeySequenceEdit *editHotkey = nullptr;
-	QPushButton *btnClearHotkey = nullptr;
-	QComboBox *cmbMouseBtn = nullptr;
-	QCheckBox *chkCtrl = nullptr;
-	QCheckBox *chkAlt = nullptr;
-	QCheckBox *chkShift = nullptr;
-	QCheckBox *chkWin = nullptr;
-	QCheckBox *chkLeftCtrl = nullptr;
-	QCheckBox *chkRightCtrl = nullptr;
-	QCheckBox *chkLeftAlt = nullptr;
-	QCheckBox *chkRightAlt = nullptr;
-	QCheckBox *chkLeftShift = nullptr;
-	QCheckBox *chkRightShift = nullptr;
-	QCheckBox *chkLeftWin = nullptr;
-	QCheckBox *chkRightWin = nullptr;
+	struct LevelRow {
+		QDoubleSpinBox *zoom = nullptr;
+		QSpinBox *in = nullptr;
+		QSpinBox *out = nullptr;
+		QKeySequenceEdit *hotkey = nullptr;
+		QPushButton *clear = nullptr;
+	};
+	LevelRow levelRows[5];
 
-	QDoubleSpinBox *spZoom = nullptr;
-	QSpinBox *spIn = nullptr;
-	QSpinBox *spOut = nullptr;
 	QCheckBox *chkFollow = nullptr;
 	QDoubleSpinBox *spFollowSpeed = nullptr;
 	QCheckBox *chkCenterCursorUntilEdge = nullptr;
@@ -84,10 +72,6 @@ private:
 	QPushButton *btnRefresh = nullptr;
 	QPushButton *btnApply = nullptr;
 	QPushButton *btnTest = nullptr;
-
-	QWidget *rowHotkeyWidget = nullptr;
-	QWidget *rowMouseWidget = nullptr;
-	QWidget *rowModifiersWidget = nullptr;
 
 	bool loading = false;
 };

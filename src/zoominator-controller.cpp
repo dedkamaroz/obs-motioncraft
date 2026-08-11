@@ -81,6 +81,30 @@ static inline double smoothstep(double t)
 	return t * t * (3.0 - 2.0 * t);
 }
 
+/* Cubic Hermite from (z0, v0) to (z1, zero velocity) over duration D seconds,
+ * evaluated at u in [0,1]. Velocity is in zoom units per second.
+ *
+ * With v0 == 0 the basis collapses to
+ *     z = z0 + (z1 - z0) * (3u^2 - 2u^3) = z0 + (z1 - z0) * smoothstep(u)
+ * so an uninterrupted transition is the same ease-in/ease-out ramp the plugin
+ * has always used. The v0 term only comes into play when a transition is
+ * retargeted mid-flight: the new segment then starts at the speed the old one
+ * had, instead of snapping to zero and re-accelerating, and still arrives at
+ * rest. Departure velocity is continuous, so there is no visible jolt at the
+ * seam; the trade is a bounded overshoot of at most ~0.148 * D * v0 when the
+ * new target lies behind the direction of travel, which reads as momentum. */
+static inline void hermite_ease(double u, double z0, double z1, double v0, double D, double &zOut, double &velOut)
+{
+	const double u2 = u * u;
+	const double u3 = u2 * u;
+	const double h00 = 2.0 * u3 - 3.0 * u2 + 1.0;
+	const double h10 = u3 - 2.0 * u2 + u;
+	const double h01 = -2.0 * u3 + 3.0 * u2;
+
+	zOut = z0 * h00 + (D * v0) * h10 + z1 * h01;
+	velOut = (D > 0.0) ? (((z1 - z0) * (6.0 * u - 6.0 * u2) + (D * v0) * (3.0 * u2 - 4.0 * u + 1.0)) / D) : 0.0;
+}
+
 static inline bool nearly_equal(float a, float b, float eps = 0.5f)
 {
 	return std::fabs(a - b) <= eps;
@@ -554,27 +578,22 @@ void ZoominatorController::loadSettings()
 {
 	screenKey.clear();
 
-	hotkeySequence = QStringLiteral("Ctrl+F1");
-	hotkeyMode = QStringLiteral("hold");
+	/* Times ramp with the zoom so that stepping between adjacent levels costs
+	 * roughly the same wall clock wherever you are on the ladder. */
+	static const struct {
+		double zoom;
+		int inMs;
+		int outMs;
+	} kLevelDefaults[kZoomLevelCount] = {
+		{1.25, 300, 300}, {1.50, 500, 500}, {2.00, 800, 800}, {3.00, 1200, 1200}, {4.00, 1600, 1600},
+	};
+	for (int i = 0; i < kZoomLevelCount; i++) {
+		zoomLevels[i] = ZoomLevel{};
+		zoomLevels[i].zoom = kLevelDefaults[i].zoom;
+		zoomLevels[i].inMs = kLevelDefaults[i].inMs;
+		zoomLevels[i].outMs = kLevelDefaults[i].outMs;
+	}
 
-	triggerType = QStringLiteral("keyboard");
-	mouseButton = QStringLiteral("x1");
-	modCtrl = true;
-	modAlt = false;
-	modShift = false;
-	modWin = false;
-	modLeftCtrl = false;
-	modRightCtrl = false;
-	modLeftAlt = false;
-	modRightAlt = false;
-	modLeftShift = false;
-	modRightShift = false;
-	modLeftWin = false;
-	modRightWin = false;
-
-	zoomFactor = 2.0;
-	animInMs = 180;
-	animOutMs = 180;
 	followMouse = true;
 	followMouseRuntimeEnabled = true;
 	followSpeed = 8.0;
@@ -605,15 +624,8 @@ void ZoominatorController::loadSettings()
 	screenKey = getStr("screen_key");
 	if (screenKey.isEmpty())
 		screenKey = getStr("source_name");
-	hotkeySequence = getStr("hotkey");
-	if (hotkeySequence.isEmpty())
-		hotkeySequence = QStringLiteral("Ctrl+F1");
-	hotkeyMode = getStr("hotkey_mode");
 	followToggleHotkeySequence = getStr("follow_toggle_hotkey");
-	if (hotkeyMode != "toggle")
-		hotkeyMode = "hold";
 
-	triggerType = getStr("trigger_type");
 	QKeySequence followSeq(followToggleHotkeySequence);
 	if (!followSeq.isEmpty()) {
 		const QKeyCombination kc = followSeq[0];
@@ -684,52 +696,51 @@ void ZoominatorController::loadSettings()
 				       followToggleModWin || key != 0);
 	}
 
-	if (triggerType != "mouse")
-		triggerType = "keyboard";
+	obs_data_array_t *levelArr = obs_data_get_array(data, "zoom_levels");
+	if (levelArr) {
+		const size_t levelCount = obs_data_array_count(levelArr);
+		for (size_t i = 0; i < levelCount && i < (size_t)kZoomLevelCount; i++) {
+			obs_data_t *lvItem = obs_data_array_item(levelArr, i);
+			if (!lvItem)
+				continue;
+			ZoomLevel &lv = zoomLevels[i];
+			if (obs_data_has_user_value(lvItem, "zoom"))
+				lv.zoom = obs_data_get_double(lvItem, "zoom");
+			if (obs_data_has_user_value(lvItem, "in_ms"))
+				lv.inMs = (int)obs_data_get_int(lvItem, "in_ms");
+			if (obs_data_has_user_value(lvItem, "out_ms"))
+				lv.outMs = (int)obs_data_get_int(lvItem, "out_ms");
+			const char *lvHk = obs_data_get_string(lvItem, "hotkey");
+			lv.hotkey = lvHk ? QString::fromUtf8(lvHk) : QString();
+			obs_data_release(lvItem);
+		}
+		obs_data_array_release(levelArr);
+	} else if (obs_data_has_user_value(data, "zoom_factor") || obs_data_has_user_value(data, "hotkey")) {
+		/* Config written by a build that had a single zoom trigger. Carry it
+		 * over as level 1 so an existing setup keeps working; the remaining
+		 * levels stay at their defaults with no hotkey bound. The old Hold
+		 * behaviour has no equivalent - level keys toggle. */
+		ZoomLevel &lv = zoomLevels[0];
+		if (obs_data_has_user_value(data, "zoom_factor"))
+			lv.zoom = obs_data_get_double(data, "zoom_factor");
+		if (obs_data_has_user_value(data, "anim_in_ms"))
+			lv.inMs = (int)obs_data_get_int(data, "anim_in_ms");
+		if (obs_data_has_user_value(data, "anim_out_ms"))
+			lv.outMs = (int)obs_data_get_int(data, "anim_out_ms");
+		if (obs_data_get_string(data, "trigger_type") &&
+		    strcmp(obs_data_get_string(data, "trigger_type"), "mouse") != 0) {
+			const char *oldHk = obs_data_get_string(data, "hotkey");
+			lv.hotkey = oldHk ? QString::fromUtf8(oldHk) : QString();
+		}
+		blog(LOG_INFO, "[Zoominator] Migrated the single zoom trigger to zoom level 1.");
+	}
 
-	mouseButton = getStr("mouse_button");
-	if (mouseButton.isEmpty())
-		mouseButton = "x1";
-
-	if (obs_data_has_user_value(data, "mod_ctrl"))
-		modCtrl = obs_data_get_bool(data, "mod_ctrl");
-	if (obs_data_has_user_value(data, "mod_alt"))
-		modAlt = obs_data_get_bool(data, "mod_alt");
-	if (obs_data_has_user_value(data, "mod_shift"))
-		modShift = obs_data_get_bool(data, "mod_shift");
-	if (obs_data_has_user_value(data, "mod_win"))
-		modWin = obs_data_get_bool(data, "mod_win");
-	if (obs_data_has_user_value(data, "mod_left_ctrl"))
-		modLeftCtrl = obs_data_get_bool(data, "mod_left_ctrl");
-	if (obs_data_has_user_value(data, "mod_right_ctrl"))
-		modRightCtrl = obs_data_get_bool(data, "mod_right_ctrl");
-	if (obs_data_has_user_value(data, "mod_left_alt"))
-		modLeftAlt = obs_data_get_bool(data, "mod_left_alt");
-	if (obs_data_has_user_value(data, "mod_right_alt"))
-		modRightAlt = obs_data_get_bool(data, "mod_right_alt");
-	if (obs_data_has_user_value(data, "mod_left_shift"))
-		modLeftShift = obs_data_get_bool(data, "mod_left_shift");
-	if (obs_data_has_user_value(data, "mod_right_shift"))
-		modRightShift = obs_data_get_bool(data, "mod_right_shift");
-	if (obs_data_has_user_value(data, "mod_left_win"))
-		modLeftWin = obs_data_get_bool(data, "mod_left_win");
-	if (obs_data_has_user_value(data, "mod_right_win"))
-		modRightWin = obs_data_get_bool(data, "mod_right_win");
-
-	if (obs_data_has_user_value(data, "zoom_factor"))
-		zoomFactor = obs_data_get_double(data, "zoom_factor");
-
-	if (zoomFactor < 0.0)
-		zoomFactor = 0.0;
-
-	if (obs_data_has_user_value(data, "anim_in_ms"))
-		animInMs = (int)obs_data_get_int(data, "anim_in_ms");
-	if (obs_data_has_user_value(data, "anim_out_ms"))
-		animOutMs = (int)obs_data_get_int(data, "anim_out_ms");
-	if (animInMs < 0)
-		animInMs = 180;
-	if (animOutMs < 0)
-		animOutMs = 180;
+	for (int i = 0; i < kZoomLevelCount; i++) {
+		ZoomLevel &lv = zoomLevels[i];
+		lv.zoom = clampd(lv.zoom, 1.0, 8.0);
+		lv.inMs = std::clamp(lv.inMs, 0, 10000);
+		lv.outMs = std::clamp(lv.outMs, 0, 10000);
+	}
 
 	if (obs_data_has_user_value(data, "follow_mouse"))
 		followMouse = obs_data_get_bool(data, "follow_mouse");
@@ -803,28 +814,21 @@ void ZoominatorController::saveSettings()
 
 	obs_data_t *data = obs_data_create();
 	obs_data_set_string(data, "screen_key", screenKey.toUtf8().constData());
-	obs_data_set_string(data, "hotkey", hotkeySequence.toUtf8().constData());
-	obs_data_set_string(data, "hotkey_mode", hotkeyMode.toUtf8().constData());
 	obs_data_set_string(data, "follow_toggle_hotkey", followToggleHotkeySequence.toUtf8().constData());
 
-	obs_data_set_string(data, "trigger_type", triggerType.toUtf8().constData());
-	obs_data_set_string(data, "mouse_button", mouseButton.toUtf8().constData());
-	obs_data_set_bool(data, "mod_ctrl", modCtrl);
-	obs_data_set_bool(data, "mod_alt", modAlt);
-	obs_data_set_bool(data, "mod_shift", modShift);
-	obs_data_set_bool(data, "mod_win", modWin);
-	obs_data_set_bool(data, "mod_left_ctrl", modLeftCtrl);
-	obs_data_set_bool(data, "mod_right_ctrl", modRightCtrl);
-	obs_data_set_bool(data, "mod_left_alt", modLeftAlt);
-	obs_data_set_bool(data, "mod_right_alt", modRightAlt);
-	obs_data_set_bool(data, "mod_left_shift", modLeftShift);
-	obs_data_set_bool(data, "mod_right_shift", modRightShift);
-	obs_data_set_bool(data, "mod_left_win", modLeftWin);
-	obs_data_set_bool(data, "mod_right_win", modRightWin);
+	obs_data_array_t *levelArr = obs_data_array_create();
+	for (const ZoomLevel &lv : zoomLevels) {
+		obs_data_t *lvItem = obs_data_create();
+		obs_data_set_double(lvItem, "zoom", lv.zoom);
+		obs_data_set_int(lvItem, "in_ms", lv.inMs);
+		obs_data_set_int(lvItem, "out_ms", lv.outMs);
+		obs_data_set_string(lvItem, "hotkey", lv.hotkey.toUtf8().constData());
+		obs_data_array_push_back(levelArr, lvItem);
+		obs_data_release(lvItem);
+	}
+	obs_data_set_array(data, "zoom_levels", levelArr);
+	obs_data_array_release(levelArr);
 
-	obs_data_set_double(data, "zoom_factor", zoomFactor);
-	obs_data_set_int(data, "anim_in_ms", animInMs);
-	obs_data_set_int(data, "anim_out_ms", animOutMs);
 	obs_data_set_bool(data, "follow_mouse", followMouse);
 	followMouseRuntimeEnabled = true;
 	obs_data_set_double(data, "follow_speed", followSpeed);
@@ -878,40 +882,151 @@ void ZoominatorController::ensureTicking(bool on)
 	}
 }
 
-void ZoominatorController::startZoomIn()
+double ZoominatorController::levelZoom(int level) const
 {
-	markRecoveryActive();
-	lastTickMs = 0;
-	pendingFinish.store(false, std::memory_order_release);
-	animDir.store(+1, std::memory_order_relaxed);
-	tickingWanted.store(true, std::memory_order_release);
-	ensureTicking(true);
-	/* Sample immediately so the first rendered frame after the trigger already
-	 * has a scene and a cursor position, rather than waiting for the Qt timer. */
-	onTick();
+	if (level < 1 || level > kZoomLevelCount)
+		return 1.0;
+	const double z = zoomLevels[level - 1].zoom;
+	return (z > 1.0) ? z : 1.0;
 }
 
-void ZoominatorController::startZoomOut()
+/* Position of a zoom value on the in- or out-timeline, whose origin is the
+ * unzoomed state. Levels sit at the coordinates the user configured; a zoom
+ * that falls between two levels - which is where an interrupted transition
+ * starts - is interpolated from the pair bracketing it. Transition duration is
+ * then just the distance between two coordinates, which gives |in(B) - in(A)|
+ * for a plain A -> B zoom in and in(B) for a zoom in from rest. */
+double ZoominatorController::timelineMsForZoom(double z, bool zoomingIn) const
 {
-	lastTickMs = 0;
-	animDir.store(-1, std::memory_order_relaxed);
+	struct Point {
+		double zoom;
+		double ms;
+	};
+
+	Point points[kZoomLevelCount + 1];
+	int count = 0;
+	points[count++] = {1.0, 0.0};
+	for (const ZoomLevel &lv : zoomLevels) {
+		if (lv.zoom > 1.0)
+			points[count++] = {lv.zoom, (double)(zoomingIn ? lv.inMs : lv.outMs)};
+	}
+	std::sort(points, points + count, [](const Point &a, const Point &b) { return a.zoom < b.zoom; });
+
+	if (z <= points[0].zoom)
+		return points[0].ms;
+
+	for (int i = 1; i < count; i++) {
+		if (z > points[i].zoom)
+			continue;
+		const double span = points[i].zoom - points[i - 1].zoom;
+		if (span <= 1e-9)
+			return points[i].ms;
+		const double f = (z - points[i - 1].zoom) / span;
+		return points[i - 1].ms + (points[i].ms - points[i - 1].ms) * f;
+	}
+
+	return points[count - 1].ms;
+}
+
+/* Graphics thread only: seeds a transition from wherever the zoom currently is,
+ * at whatever speed it currently has. */
+void ZoominatorController::beginSegment(int level)
+{
+	const double zTarget = levelZoom(level);
+	const double zNow = currentZoom;
+	const bool zoomingIn = (zTarget > zNow);
+	const double durMs = std::fabs(timelineMsForZoom(zTarget, zoomingIn) - timelineMsForZoom(zNow, zoomingIn));
+
+	segZ0 = zNow;
+	segZ1 = zTarget;
+	segV0 = currentZoomVel;
+	segU = 0.0;
+	segDurSec = durMs / 1000.0;
+
+	if (durMs < 1.0) {
+		/* Both endpoints share a timeline coordinate, so there is no ramp to
+		 * run. Snap, and drop any carried velocity with it. */
+		currentZoom = zTarget;
+		currentZoomVel = 0.0;
+		segmentRunning.store(false, std::memory_order_relaxed);
+		return;
+	}
+
+	segmentRunning.store(true, std::memory_order_relaxed);
+}
+
+void ZoominatorController::activateLevel(int level)
+{
+	if (level < 1 || level > kZoomLevelCount)
+		return;
+
+	/* The graphics thread flags a completed unzoom and the Qt timer does the
+	 * actual teardown up to a frame later. A key pressed inside that gap would
+	 * otherwise re-capture the still-normalized transforms as if they were the
+	 * originals, permanently losing the item's real bounds type and alignment.
+	 * Finish first, then start clean. */
+	if (pendingFinish.exchange(false))
+		finishZoomOnMainThread();
+
+	/* A level configured at 1.0 is not a zoom, so treat its key as "go back to
+	 * unzoomed" rather than as a level you can sit at. */
+	const int pressed = (levelZoom(level) > 1.0) ? level : 0;
+	const int next = (requestedLevel == pressed) ? 0 : pressed;
+	const int previous = requestedLevel;
+	requestedLevel = next;
+
+	logi(debug, "[Zoominator] Level key %d: %d -> %d", level, previous, next);
+
+	if (previous == 0 && next != 0) {
+		/* Leaving rest. Everything the follow-mouse anchor derives from has to
+		 * start clean here and only here - resetting it on every level change
+		 * would yank the focal point mid-zoom. */
+		markRecoveryActive();
+		lastTickMs = 0;
+		pendingFinish.store(false, std::memory_order_release);
+		followHasPos = false;
+		lastCursorSampleValid = false;
+		lastCursorMovementMs = 0;
+		mouseTrackingIdle = false;
+		targetHasPos = false;
+	}
+
+	if (next == 0) {
+		markerClickFlashStartMs = 0;
+		markerClickFlashHoldUntilMs = 0;
+		markerClickFlashFadeOutEndMs = 0;
+		markerClickHasPos = false;
+	}
+
+	targetLevel.store(next, std::memory_order_relaxed);
+	retargetRequested.store(true, std::memory_order_release);
 	tickingWanted.store(true, std::memory_order_release);
-	markerClickFlashStartMs = 0;
-	markerClickFlashHoldUntilMs = 0;
-	markerClickFlashFadeOutEndMs = 0;
-	markerClickHasPos = false;
 	ensureTicking(true);
+
+	if (previous == 0 && next != 0) {
+		/* Sample immediately so the first rendered frame after the key already
+		 * has a scene and a cursor position, rather than waiting for the Qt
+		 * timer. */
+		onTick();
+	}
 }
 
 void ZoominatorController::resetState()
 {
-	zoomPressed = false;
-	zoomLatched = false;
 	zoomActive.store(false, std::memory_order_release);
 	tickingWanted.store(false, std::memory_order_release);
 	pendingFinish.store(false, std::memory_order_release);
-	animT = 0.0;
-	animDir.store(0, std::memory_order_relaxed);
+	requestedLevel = 0;
+	targetLevel.store(0, std::memory_order_relaxed);
+	retargetRequested.store(false, std::memory_order_relaxed);
+	segmentRunning.store(false, std::memory_order_relaxed);
+	segZ0 = 1.0;
+	segZ1 = 1.0;
+	segV0 = 0.0;
+	segDurSec = 0.0;
+	segU = 1.0;
+	currentZoom = 1.0;
+	currentZoomVel = 0.0;
 	followHasPos = false;
 	lastCursorSampleValid = false;
 	lastCursorMovementMs = 0;
@@ -2392,7 +2507,7 @@ void ZoominatorController::restoreOriginalSceneItemsFromState()
 	}
 }
 
-void ZoominatorController::applyZoomToScene(double t)
+void ZoominatorController::applyZoomToScene(double z)
 {
 	if (sceneItems.empty())
 		return;
@@ -2436,10 +2551,6 @@ void ZoominatorController::applyZoomToScene(double t)
 	auto isLiveItem = [&liveItems](obs_sceneitem_t *item) {
 		return item && std::find(liveItems.begin(), liveItems.end(), item) != liveItems.end();
 	};
-
-	const double tt = smoothstep(clampd(t, 0.0, 1.0));
-	const double zTarget = (zoomFactor <= 1.0) ? 1.0 : zoomFactor;
-	const double z = 1.0 + (zTarget - 1.0) * tt;
 
 	obs_video_info ovi{};
 	const bool haveVi = obs_get_video_info(&ovi);
@@ -2574,7 +2685,7 @@ void ZoominatorController::applyZoomToScene(double t)
 
 	const qint64 nowApplyMs = nowMs;
 	const bool steadyFollow = followMouse && followMouseRuntimeEnabled && !mouseTrackingIdle &&
-				  animDir.load(std::memory_order_relaxed) == 0 && animT >= 0.999;
+				  !segmentRunning.load(std::memory_order_relaxed);
 	if (steadyFollow) {
 		const float dx = anchorX - lastFollowAnchorX;
 		const float dy = anchorY - lastFollowAnchorY;
@@ -2739,21 +2850,32 @@ void ZoominatorController::videoTick(double seconds)
 	 * frame, not to impose a rate of our own. */
 	tickDeltaSeconds = clampd(seconds, 1.0 / 480.0, 1.0 / 20.0);
 
-	const int dir = animDir.load(std::memory_order_relaxed);
-	const int dur = (dir >= 0) ? animInMs : animOutMs;
-	animT += (double)dir * (tickDeltaSeconds * 1000.0) / (double)std::max(1, dur);
+	/* Retargeting happens here rather than in the key handler because the
+	 * current zoom and velocity - the two things a seamless hand-off needs -
+	 * only exist on this thread. */
+	if (retargetRequested.exchange(false, std::memory_order_acq_rel))
+		beginSegment(targetLevel.load(std::memory_order_relaxed));
 
-	if (animT >= 1.0) {
-		animT = 1.0;
-		animDir.store(0, std::memory_order_relaxed);
-	}
-	if (animT <= 0.0) {
-		animT = 0.0;
-		animDir.store(0, std::memory_order_relaxed);
-		targetHasPos = false;
+	if (segmentRunning.load(std::memory_order_relaxed)) {
+		segU += (segDurSec > 0.0) ? (tickDeltaSeconds / segDurSec) : 1.0;
+		if (segU >= 1.0) {
+			segU = 1.0;
+			currentZoom = segZ1;
+			currentZoomVel = 0.0;
+			segmentRunning.store(false, std::memory_order_relaxed);
+			if (segZ1 <= 1.0)
+				targetHasPos = false;
+		} else {
+			hermite_ease(segU, segZ0, segZ1, segV0, segDurSec, currentZoom, currentZoomVel);
+			/* Carried momentum can undershoot below the original size, which
+			 * the framing clamp has no meaning for. Hold at 1.0; the curve
+			 * is re-evaluated from segU next frame, so this never accumulates. */
+			if (currentZoom < 1.0)
+				currentZoom = 1.0;
+		}
 	}
 
-	if (animT == 0.0 && animDir.load(std::memory_order_relaxed) == 0) {
+	if (!segmentRunning.load(std::memory_order_relaxed) && currentZoom <= 1.0) {
 		/* Stop touching shared state here, then let the main thread do the
 		 * restore, the settings write and the reset. */
 		zoomActive.store(false, std::memory_order_release);
@@ -2761,7 +2883,7 @@ void ZoominatorController::videoTick(double seconds)
 		return;
 	}
 
-	applyZoomToScene(animT);
+	applyZoomToScene(currentZoom);
 }
 
 void ZoominatorController::finishZoomOnMainThread()
@@ -2892,45 +3014,6 @@ static bool mods_current(bool wantCtrl, bool wantAlt, bool wantShift, bool wantW
 #endif
 
 #ifdef _WIN32
-static inline bool is_modifier_vk(int vk)
-{
-	switch (vk) {
-	case VK_CONTROL:
-	case VK_LCONTROL:
-	case VK_RCONTROL:
-	case VK_MENU:
-	case VK_LMENU:
-	case VK_RMENU:
-	case VK_SHIFT:
-	case VK_LSHIFT:
-	case VK_RSHIFT:
-	case VK_LWIN:
-	case VK_RWIN:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static inline bool is_wanted_modifier_vk(int vk, const ZoominatorController *ctl)
-{
-	if (!ctl)
-		return false;
-	if ((ctl->modCtrl && (vk == VK_CONTROL || vk == VK_LCONTROL || vk == VK_RCONTROL)) ||
-	    (ctl->modLeftCtrl && vk == VK_LCONTROL) || (ctl->modRightCtrl && vk == VK_RCONTROL))
-		return true;
-	if ((ctl->modAlt && (vk == VK_MENU || vk == VK_LMENU || vk == VK_RMENU)) ||
-	    (ctl->modLeftAlt && vk == VK_LMENU) || (ctl->modRightAlt && vk == VK_RMENU))
-		return true;
-	if ((ctl->modShift && (vk == VK_SHIFT || vk == VK_LSHIFT || vk == VK_RSHIFT)) ||
-	    (ctl->modLeftShift && vk == VK_LSHIFT) || (ctl->modRightShift && vk == VK_RSHIFT))
-		return true;
-	if ((ctl->modWin && (vk == VK_LWIN || vk == VK_RWIN)) || (ctl->modLeftWin && vk == VK_LWIN) ||
-	    (ctl->modRightWin && vk == VK_RWIN))
-		return true;
-	return false;
-}
-
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
@@ -2946,26 +3029,6 @@ static bool vk_matches(int pressedVk, int wantVk)
 	}
 
 	return false;
-}
-
-static bool is_modifier_only_hotkey(int vk)
-{
-	switch (vk) {
-	case VK_CONTROL:
-	case VK_LCONTROL:
-	case VK_RCONTROL:
-	case VK_MENU:
-	case VK_LMENU:
-	case VK_RMENU:
-	case VK_SHIFT:
-	case VK_LSHIFT:
-	case VK_RSHIFT:
-	case VK_LWIN:
-	case VK_RWIN:
-		return true;
-	default:
-		return false;
-	}
 }
 
 LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LPARAM lParam)
@@ -2987,43 +3050,15 @@ LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LP
 			g_ctl->toggleFollowMouseRuntime();
 		}
 
-		if (!(g_ctl->hkValid && g_ctl->triggerType == "keyboard"))
-			return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
-
-		if (g_ctl->hotkeyVk == 0) {
-			if (!is_modifier_vk(vk))
-				return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
-
-			if (!is_wanted_modifier_vk(vk, g_ctl))
-				return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
-
-			if (g_ctl->hotkeyMode == "toggle") {
-				if (down)
-					g_ctl->onTriggerDown();
-			} else {
-				if (down)
-					g_ctl->onTriggerDown();
-				if (up && g_ctl->zoomPressed)
-					g_ctl->onTriggerUp();
-			}
-
-			return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
-		}
-
-		if (vk_matches(vk, g_ctl->hotkeyVk)) {
-			if (mods_current(g_ctl->modCtrl, g_ctl->modAlt, g_ctl->modShift, g_ctl->modWin,
-					 g_ctl->modLeftCtrl, g_ctl->modRightCtrl, g_ctl->modLeftAlt, g_ctl->modRightAlt,
-					 g_ctl->modLeftShift, g_ctl->modRightShift, g_ctl->modLeftWin,
-					 g_ctl->modRightWin)) {
-				if (g_ctl->hotkeyMode == "toggle") {
-					if (down)
-						g_ctl->onTriggerDown();
-				} else {
-					if (down)
-						g_ctl->onTriggerDown();
-					if (up)
-						g_ctl->onTriggerUp();
-				}
+		if (down) {
+			for (int i = 0; i < ZoominatorController::kZoomLevelCount; i++) {
+				const auto &lv = g_ctl->zoomLevels[i];
+				if (!lv.valid || lv.vk == 0 || !vk_matches(vk, lv.vk))
+					continue;
+				if (!mods_current(lv.modCtrl, lv.modAlt, lv.modShift, lv.modWin))
+					continue;
+				g_ctl->activateLevel(i + 1);
+				break;
 			}
 		}
 	}
@@ -3039,62 +3074,15 @@ LRESULT CALLBACK ZoominatorController::mouse_hook_proc(int nCode, WPARAM wParam,
 
 		const bool down = (wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN ||
 				   wParam == WM_XBUTTONDOWN);
-		const bool up = (wParam == WM_LBUTTONUP || wParam == WM_RBUTTONUP || wParam == WM_MBUTTONUP ||
-				 wParam == WM_XBUTTONUP);
 
 		if (down)
 			g_ctl->captureMarkerClickPosition();
-
-		if (g_ctl->triggerType == "mouse" && (down || up)) {
-			unsigned short mouseData = (unsigned short)HIWORD(m->mouseData);
-			if (mods_current(g_ctl->modCtrl, g_ctl->modAlt, g_ctl->modShift, g_ctl->modWin,
-					 g_ctl->modLeftCtrl, g_ctl->modRightCtrl, g_ctl->modLeftAlt, g_ctl->modRightAlt,
-					 g_ctl->modLeftShift, g_ctl->modRightShift, g_ctl->modLeftWin,
-					 g_ctl->modRightWin)) {
-				if (g_ctl->triggerMatchesMouse((unsigned int)wParam, mouseData)) {
-					if (g_ctl->hotkeyMode == "toggle") {
-						if (down)
-							g_ctl->onTriggerDown();
-					} else {
-						if (down)
-							g_ctl->onTriggerDown();
-						if (up)
-							g_ctl->onTriggerUp();
-					}
-				}
-			}
-		}
 	}
 	return CallNextHookEx((HHOOK)g_ctl->mouseHook, nCode, wParam, lParam);
 }
 #endif
 
 #ifdef __APPLE__
-static inline bool is_modifier_vk(int vk)
-{
-	return vk == kVK_Control || vk == kVK_RightControl || vk == kVK_Option || vk == kVK_RightOption ||
-	       vk == kVK_Shift || vk == kVK_RightShift || vk == kVK_Command || vk == kVK_RightCommand;
-}
-
-static inline bool is_wanted_modifier_vk(int vk, const ZoominatorController *ctl)
-{
-	if (!ctl)
-		return false;
-	if ((ctl->modCtrl && (vk == kVK_Control || vk == kVK_RightControl)) ||
-	    (ctl->modLeftCtrl && vk == kVK_Control) || (ctl->modRightCtrl && vk == kVK_RightControl))
-		return true;
-	if ((ctl->modAlt && (vk == kVK_Option || vk == kVK_RightOption)) || (ctl->modLeftAlt && vk == kVK_Option) ||
-	    (ctl->modRightAlt && vk == kVK_RightOption))
-		return true;
-	if ((ctl->modShift && (vk == kVK_Shift || vk == kVK_RightShift)) || (ctl->modLeftShift && vk == kVK_Shift) ||
-	    (ctl->modRightShift && vk == kVK_RightShift))
-		return true;
-	if ((ctl->modWin && (vk == kVK_Command || vk == kVK_RightCommand)) || (ctl->modLeftWin && vk == kVK_Command) ||
-	    (ctl->modRightWin && vk == kVK_RightCommand))
-		return true;
-	return false;
-}
-
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
@@ -3105,27 +3093,6 @@ static bool vk_matches(int pressedVk, int wantVk)
 					     kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9};
 		return pressedVk == numRow[wantVk - kVK_ANSI_Keypad0];
 	}
-	return false;
-}
-
-static bool mac_mouse_button_matches(CGEventType type, int64_t buttonNumber, const QString &want)
-{
-	const bool isDown =
-		(type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown || type == kCGEventOtherMouseDown);
-	const bool isUp = (type == kCGEventLeftMouseUp || type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp);
-	if (!isDown && !isUp)
-		return false;
-
-	if (want == "left")
-		return buttonNumber == 0;
-	if (want == "right")
-		return buttonNumber == 1;
-	if (want == "middle")
-		return buttonNumber == 2;
-	if (want == "x1")
-		return buttonNumber == 3;
-	if (want == "x2")
-		return buttonNumber == 4;
 	return false;
 }
 
@@ -3153,119 +3120,31 @@ CGEventRef ZoominatorController::eventTapCallback(CGEventTapProxy proxy, CGEvent
 				 ctl->followToggleModWin)) {
 			ctl->toggleFollowMouseRuntime();
 		}
-	}
 
-	if (ctl->triggerType == "keyboard" && ctl->hkValid) {
-		if (type == kCGEventKeyDown || type == kCGEventKeyUp) {
-			const int keycode = (int)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-			const bool down = (type == kCGEventKeyDown);
-			const bool up = (type == kCGEventKeyUp);
-
-			if (ctl->hotkeyVk == 0) {
-				return event;
+		if (down) {
+			for (int i = 0; i < ZoominatorController::kZoomLevelCount; i++) {
+				const auto &lv = ctl->zoomLevels[i];
+				if (!lv.valid || lv.vk == 0 || !vk_matches(keycode, lv.vk))
+					continue;
+				if (!mods_current(lv.modCtrl, lv.modAlt, lv.modShift, lv.modWin))
+					continue;
+				ctl->activateLevel(i + 1);
+				break;
 			}
-
-			if (vk_matches(keycode, ctl->hotkeyVk)) {
-				if (mods_current(ctl->modCtrl, ctl->modAlt, ctl->modShift, ctl->modWin,
-						 ctl->modLeftCtrl, ctl->modRightCtrl, ctl->modLeftAlt, ctl->modRightAlt,
-						 ctl->modLeftShift, ctl->modRightShift, ctl->modLeftWin,
-						 ctl->modRightWin)) {
-					if (ctl->hotkeyMode == "toggle") {
-						if (down)
-							ctl->onTriggerDown();
-					} else {
-						if (down)
-							ctl->onTriggerDown();
-						if (up)
-							ctl->onTriggerUp();
-					}
-				}
-			}
-			return event;
-		}
-
-		if (type == kCGEventFlagsChanged) {
-			if (ctl->hotkeyVk == 0) {
-				const bool matchNow = mods_current(ctl->modCtrl, ctl->modAlt, ctl->modShift,
-								   ctl->modWin, ctl->modLeftCtrl, ctl->modRightCtrl,
-								   ctl->modLeftAlt, ctl->modRightAlt, ctl->modLeftShift,
-								   ctl->modRightShift, ctl->modLeftWin,
-								   ctl->modRightWin);
-				if (ctl->hotkeyMode == "toggle") {
-					if (matchNow && !ctl->zoomPressed && !ctl->zoomLatched)
-						ctl->onTriggerDown();
-					else if (matchNow && ctl->zoomLatched)
-						ctl->onTriggerDown();
-				} else {
-					if (matchNow && !ctl->zoomPressed)
-						ctl->onTriggerDown();
-					if (!matchNow && ctl->zoomPressed)
-						ctl->onTriggerUp();
-				}
-			}
-			return event;
 		}
 	}
 
 	const bool isMouseDown =
 		(type == kCGEventLeftMouseDown || type == kCGEventRightMouseDown || type == kCGEventOtherMouseDown);
-	const bool isMouseUp =
-		(type == kCGEventLeftMouseUp || type == kCGEventRightMouseUp || type == kCGEventOtherMouseUp);
 
 	if (isMouseDown)
 		ctl->captureMarkerClickPosition();
-
-	if (ctl->triggerType == "mouse") {
-		if (isMouseDown || isMouseUp) {
-			const int64_t btn = CGEventGetIntegerValueField(event, kCGMouseEventButtonNumber);
-			if (mods_current(ctl->modCtrl, ctl->modAlt, ctl->modShift, ctl->modWin, ctl->modLeftCtrl,
-					 ctl->modRightCtrl, ctl->modLeftAlt, ctl->modRightAlt, ctl->modLeftShift,
-					 ctl->modRightShift, ctl->modLeftWin, ctl->modRightWin)) {
-				if (mac_mouse_button_matches(type, btn, ctl->mouseButton)) {
-					if (ctl->hotkeyMode == "toggle") {
-						if (isMouseDown)
-							ctl->onTriggerDown();
-					} else {
-						if (isMouseDown)
-							ctl->onTriggerDown();
-						if (isMouseUp)
-							ctl->onTriggerUp();
-					}
-				}
-			}
-		}
-	}
 
 	return event;
 }
 #endif
 
 #ifdef __linux__
-static inline bool is_modifier_vk(int vk)
-{
-	return vk == XK_Control_L || vk == XK_Control_R || vk == XK_Alt_L || vk == XK_Alt_R || vk == XK_Shift_L ||
-	       vk == XK_Shift_R || vk == XK_Super_L || vk == XK_Super_R;
-}
-
-static inline bool is_wanted_modifier_vk(int vk, const ZoominatorController *ctl)
-{
-	if (!ctl)
-		return false;
-	if ((ctl->modCtrl && (vk == XK_Control_L || vk == XK_Control_R)) || (ctl->modLeftCtrl && vk == XK_Control_L) ||
-	    (ctl->modRightCtrl && vk == XK_Control_R))
-		return true;
-	if ((ctl->modAlt && (vk == XK_Alt_L || vk == XK_Alt_R)) || (ctl->modLeftAlt && vk == XK_Alt_L) ||
-	    (ctl->modRightAlt && vk == XK_Alt_R))
-		return true;
-	if ((ctl->modShift && (vk == XK_Shift_L || vk == XK_Shift_R)) || (ctl->modLeftShift && vk == XK_Shift_L) ||
-	    (ctl->modRightShift && vk == XK_Shift_R))
-		return true;
-	if ((ctl->modWin && (vk == XK_Super_L || vk == XK_Super_R)) || (ctl->modLeftWin && vk == XK_Super_L) ||
-	    (ctl->modRightWin && vk == XK_Super_R))
-		return true;
-	return false;
-}
-
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
@@ -3281,21 +3160,6 @@ static bool vk_matches(int pressedVk, int wantVk)
 	if (wantVk >= XK_0 && wantVk <= XK_9)
 		return pressedVk == (XK_KP_0 + (wantVk - XK_0));
 
-	return false;
-}
-
-static bool linux_button_matches(int button, const QString &want)
-{
-	if (want == "left")
-		return button == 1;
-	if (want == "middle")
-		return button == 2;
-	if (want == "right")
-		return button == 3;
-	if (want == "x1")
-		return button == 8;
-	if (want == "x2")
-		return button == 9;
 	return false;
 }
 
@@ -3328,145 +3192,29 @@ void ZoominatorController::processXInput2Events()
 				toggleFollowMouseRuntime();
 			}
 
-			if (hkValid && triggerType == "keyboard") {
-				if (hotkeyVk == 0) {
-					if (is_modifier_vk((int)sym) && is_wanted_modifier_vk((int)sym, this)) {
-						const bool matchNow = mods_current(modCtrl, modAlt, modShift, modWin,
-										   modLeftCtrl, modRightCtrl,
-										   modLeftAlt, modRightAlt,
-										   modLeftShift, modRightShift,
-										   modLeftWin, modRightWin);
-						if (hotkeyMode == "toggle") {
-							if (down && matchNow)
-								onTriggerDown();
-						} else {
-							if (down && matchNow)
-								onTriggerDown();
-							if (!down && zoomPressed && !matchNow)
-								onTriggerUp();
-						}
-					}
-				} else if (vk_matches((int)sym, hotkeyVk)) {
-					if (mods_current(modCtrl, modAlt, modShift, modWin, modLeftCtrl, modRightCtrl,
-							 modLeftAlt, modRightAlt, modLeftShift, modRightShift,
-							 modLeftWin, modRightWin)) {
-						if (hotkeyMode == "toggle") {
-							if (down)
-								onTriggerDown();
-						} else {
-							if (down)
-								onTriggerDown();
-							if (!down)
-								onTriggerUp();
-						}
-					}
+			if (down) {
+				for (int i = 0; i < kZoomLevelCount; i++) {
+					const ZoomLevel &lv = zoomLevels[i];
+					if (!lv.valid || lv.vk == 0 || !vk_matches((int)sym, lv.vk))
+						continue;
+					if (!mods_current(lv.modCtrl, lv.modAlt, lv.modShift, lv.modWin))
+						continue;
+					activateLevel(i + 1);
+					break;
 				}
 			}
-		} else if (evtype == XI_RawButtonPress || evtype == XI_RawButtonRelease) {
+		} else if (evtype == XI_RawButtonPress) {
 			XIRawEvent *raw = (XIRawEvent *)ev.xcookie.data;
 			const int button = raw->detail;
-			const bool down = (evtype == XI_RawButtonPress);
-			const bool up = (evtype == XI_RawButtonRelease);
 
-			if (down)
+			if (button < 4 || button > 7)
 				captureMarkerClickPosition();
-
-			if (button >= 4 && button <= 7) {
-				XFreeEventData(xiDisplay, &ev.xcookie);
-				continue;
-			}
-
-			if (triggerType == "mouse" && (down || up)) {
-				if (mods_current(modCtrl, modAlt, modShift, modWin, modLeftCtrl, modRightCtrl,
-						 modLeftAlt, modRightAlt, modLeftShift, modRightShift, modLeftWin,
-						 modRightWin)) {
-					if (linux_button_matches(button, mouseButton)) {
-						if (hotkeyMode == "toggle") {
-							if (down)
-								onTriggerDown();
-						} else {
-							if (down)
-								onTriggerDown();
-							if (up)
-								onTriggerUp();
-						}
-					}
-				}
-			}
 		}
 
 		XFreeEventData(xiDisplay, &ev.xcookie);
 	}
 }
 #endif
-
-bool ZoominatorController::modsMatch() const
-{
-	return mods_current(modCtrl, modAlt, modShift, modWin, modLeftCtrl, modRightCtrl, modLeftAlt, modRightAlt,
-			    modLeftShift, modRightShift, modLeftWin, modRightWin);
-}
-
-bool ZoominatorController::triggerMatchesMouse(unsigned int msg, unsigned short mouseData) const
-{
-#ifdef _WIN32
-	const QString b = mouseButton;
-	if (b == "left")
-		return msg == WM_LBUTTONDOWN || msg == WM_LBUTTONUP;
-	if (b == "right")
-		return msg == WM_RBUTTONDOWN || msg == WM_RBUTTONUP;
-	if (b == "middle")
-		return msg == WM_MBUTTONDOWN || msg == WM_MBUTTONUP;
-	if (b == "x1")
-		return (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP) && mouseData == XBUTTON1;
-	if (b == "x2")
-		return (msg == WM_XBUTTONDOWN || msg == WM_XBUTTONUP) && mouseData == XBUTTON2;
-	return false;
-#elif defined(__linux__)
-	(void)mouseData;
-	return linux_button_matches((int)msg, mouseButton);
-#else
-	(void)msg;
-	(void)mouseData;
-	return false;
-#endif
-}
-
-void ZoominatorController::onTriggerDown()
-{
-	if (debug)
-		blog(LOG_INFO, "[Zoominator] Trigger DOWN");
-
-	if (hotkeyMode == "toggle") {
-		zoomLatched = !zoomLatched;
-		if (zoomLatched) {
-			followHasPos = false;
-			lastCursorSampleValid = false;
-			lastCursorMovementMs = 0;
-			mouseTrackingIdle = false;
-			targetHasPos = false;
-			startZoomIn();
-		} else {
-			startZoomOut();
-		}
-		return;
-	}
-
-	zoomPressed = true;
-	followHasPos = false;
-	lastCursorSampleValid = false;
-	lastCursorMovementMs = 0;
-	mouseTrackingIdle = false;
-	targetHasPos = false;
-	startZoomIn();
-}
-
-void ZoominatorController::onTriggerUp()
-{
-	if (debug)
-		blog(LOG_INFO, "[Zoominator] Trigger UP");
-	zoomPressed = false;
-	startZoomOut();
-}
 
 void ZoominatorController::toggleFollowMouseRuntime()
 {
@@ -3741,10 +3489,49 @@ static int qtKeyToVk(int qtKey)
 #endif
 }
 
+/* Level keys accept an optional modifier combination but must carry a real key:
+ * a bare Shift or Ctrl is far too easy to fire by accident when five of them
+ * are bound at once, so it is rejected rather than treated as a trigger. */
+static void parse_level_hotkey(ZoominatorController::ZoomLevel &lv)
+{
+	lv.vk = 0;
+	lv.valid = false;
+	lv.modCtrl = false;
+	lv.modAlt = false;
+	lv.modShift = false;
+	lv.modWin = false;
+
+	QKeySequence seq(lv.hotkey);
+	if (seq.isEmpty())
+		return;
+
+	const QKeyCombination kc = seq[0];
+	const int key = int(kc.key());
+	switch (key) {
+	case Qt::Key_unknown:
+	case Qt::Key_Control:
+	case Qt::Key_Shift:
+	case Qt::Key_Alt:
+	case Qt::Key_Meta:
+		return;
+	default:
+		break;
+	}
+
+	const auto mods = kc.keyboardModifiers();
+	lv.vk = qtKeyToVk(key);
+	lv.modCtrl = mods.testFlag(Qt::ControlModifier);
+	lv.modAlt = mods.testFlag(Qt::AltModifier);
+	lv.modShift = mods.testFlag(Qt::ShiftModifier);
+	lv.modWin = mods.testFlag(Qt::MetaModifier);
+	lv.valid = (lv.vk != 0);
+}
+
 void ZoominatorController::rebuildTriggersFromSettings()
 {
-	hkValid = false;
-	hotkeyVk = 0;
+	for (ZoomLevel &lv : zoomLevels)
+		parse_level_hotkey(lv);
+
 	followToggleHkValid = false;
 	followToggleHotkeyVk = 0;
 	followToggleModCtrl = false;
@@ -3821,148 +3608,27 @@ void ZoominatorController::rebuildTriggersFromSettings()
 				      (followToggleModCtrl || followToggleModAlt || followToggleModShift ||
 				       followToggleModWin || key != 0);
 	}
+}
 
-	if (triggerType != "mouse")
-		triggerType = "keyboard";
-
-	if (triggerType == "keyboard") {
-		QKeySequence seq(hotkeySequence);
-		if (seq.isEmpty()) {
-			hotkeyVk = 0;
-			hkValid = (modCtrl || modAlt || modShift || modWin || modLeftCtrl || modRightCtrl ||
-				   modLeftAlt || modRightAlt || modLeftShift || modRightShift || modLeftWin ||
-				   modRightWin);
-			if (debug)
-				blog(LOG_INFO,
-				     "[Zoominator] Hotkey empty; using modifier-only trigger (ctrl=%d alt=%d shift=%d win=%d valid=%d)",
-				     modCtrl ? 1 : 0, modAlt ? 1 : 0, modShift ? 1 : 0, modWin ? 1 : 0,
-				     hkValid ? 1 : 0);
-		} else {
-			const QKeyCombination kc = seq[0];
-			const auto mods = kc.keyboardModifiers();
-			const int key = int(kc.key());
-			hotkeyVk = qtKeyToVk(key);
-
-			const bool noMods = (mods == Qt::NoModifier);
-#ifdef _WIN32
-			const bool keyIsModifier =
-				(hotkeyVk == VK_CONTROL || hotkeyVk == VK_LCONTROL || hotkeyVk == VK_RCONTROL ||
-				 hotkeyVk == VK_MENU || hotkeyVk == VK_LMENU || hotkeyVk == VK_RMENU ||
-				 hotkeyVk == VK_SHIFT || hotkeyVk == VK_LSHIFT || hotkeyVk == VK_RSHIFT ||
-				 hotkeyVk == VK_LWIN || hotkeyVk == VK_RWIN);
-#elif defined(__APPLE__)
-			const bool keyIsModifier = (hotkeyVk == kVK_Control || hotkeyVk == kVK_RightControl ||
-						    hotkeyVk == kVK_Option || hotkeyVk == kVK_RightOption ||
-						    hotkeyVk == kVK_Shift || hotkeyVk == kVK_RightShift ||
-						    hotkeyVk == kVK_Command || hotkeyVk == kVK_RightCommand);
-#elif defined(__linux__)
-			const bool keyIsModifier = (hotkeyVk == XK_Control_L || hotkeyVk == XK_Control_R ||
-						    hotkeyVk == XK_Alt_L || hotkeyVk == XK_Alt_R ||
-						    hotkeyVk == XK_Shift_L || hotkeyVk == XK_Shift_R ||
-						    hotkeyVk == XK_Super_L || hotkeyVk == XK_Super_R);
-#else
-			const bool keyIsModifier = (key == Qt::Key_Control || key == Qt::Key_Shift ||
-						    key == Qt::Key_Alt || key == Qt::Key_Meta);
-#endif
-			if (noMods && keyIsModifier) {
-#ifdef _WIN32
-				modCtrl =
-					(hotkeyVk == VK_CONTROL || hotkeyVk == VK_LCONTROL || hotkeyVk == VK_RCONTROL);
-				modAlt = (hotkeyVk == VK_MENU || hotkeyVk == VK_LMENU || hotkeyVk == VK_RMENU);
-				modShift = (hotkeyVk == VK_SHIFT || hotkeyVk == VK_LSHIFT || hotkeyVk == VK_RSHIFT);
-				modWin = (hotkeyVk == VK_LWIN || hotkeyVk == VK_RWIN);
-				modLeftCtrl = (hotkeyVk == VK_LCONTROL);
-				modRightCtrl = (hotkeyVk == VK_RCONTROL);
-				modLeftAlt = (hotkeyVk == VK_LMENU);
-				modRightAlt = (hotkeyVk == VK_RMENU);
-				modLeftShift = (hotkeyVk == VK_LSHIFT);
-				modRightShift = (hotkeyVk == VK_RSHIFT);
-				modLeftWin = (hotkeyVk == VK_LWIN);
-				modRightWin = (hotkeyVk == VK_RWIN);
-#elif defined(__APPLE__)
-				modCtrl = (hotkeyVk == kVK_Control || hotkeyVk == kVK_RightControl);
-				modAlt = (hotkeyVk == kVK_Option || hotkeyVk == kVK_RightOption);
-				modShift = (hotkeyVk == kVK_Shift || hotkeyVk == kVK_RightShift);
-				modWin = (hotkeyVk == kVK_Command || hotkeyVk == kVK_RightCommand);
-				modLeftCtrl = (hotkeyVk == kVK_Control);
-				modRightCtrl = (hotkeyVk == kVK_RightControl);
-				modLeftAlt = (hotkeyVk == kVK_Option);
-				modRightAlt = (hotkeyVk == kVK_RightOption);
-				modLeftShift = (hotkeyVk == kVK_Shift);
-				modRightShift = (hotkeyVk == kVK_RightShift);
-				modLeftWin = (hotkeyVk == kVK_Command);
-				modRightWin = (hotkeyVk == kVK_RightCommand);
-#elif defined(__linux__)
-				modCtrl = (hotkeyVk == XK_Control_L || hotkeyVk == XK_Control_R);
-				modAlt = (hotkeyVk == XK_Alt_L || hotkeyVk == XK_Alt_R);
-				modShift = (hotkeyVk == XK_Shift_L || hotkeyVk == XK_Shift_R);
-				modWin = (hotkeyVk == XK_Super_L || hotkeyVk == XK_Super_R);
-				modLeftCtrl = (hotkeyVk == XK_Control_L);
-				modRightCtrl = (hotkeyVk == XK_Control_R);
-				modLeftAlt = (hotkeyVk == XK_Alt_L);
-				modRightAlt = (hotkeyVk == XK_Alt_R);
-				modLeftShift = (hotkeyVk == XK_Shift_L);
-				modRightShift = (hotkeyVk == XK_Shift_R);
-				modLeftWin = (hotkeyVk == XK_Super_L);
-				modRightWin = (hotkeyVk == XK_Super_R);
-#else
-				modCtrl = (key == Qt::Key_Control);
-				modAlt = (key == Qt::Key_Alt);
-				modShift = (key == Qt::Key_Shift);
-				modWin = (key == Qt::Key_Meta);
-				modLeftCtrl = false;
-				modRightCtrl = false;
-				modLeftAlt = false;
-				modRightAlt = false;
-				modLeftShift = false;
-				modRightShift = false;
-				modLeftWin = false;
-				modRightWin = false;
-#endif
-				hotkeyVk = 0;
-				hkValid = (modCtrl || modAlt || modShift || modWin || modLeftCtrl || modRightCtrl ||
-					   modLeftAlt || modRightAlt || modLeftShift || modRightShift || modLeftWin ||
-					   modRightWin);
-				if (debug)
-					blog(LOG_INFO,
-					     "[Zoominator] Single-modifier hotkey parsed; using modifier-only trigger (ctrl=%d alt=%d shift=%d win=%d valid=%d)",
-					     modCtrl ? 1 : 0, modAlt ? 1 : 0, modShift ? 1 : 0, modWin ? 1 : 0,
-					     hkValid ? 1 : 0);
-			} else {
-				modCtrl = mods.testFlag(Qt::ControlModifier);
-				modAlt = mods.testFlag(Qt::AltModifier);
-				modShift = mods.testFlag(Qt::ShiftModifier);
-				modWin = mods.testFlag(Qt::MetaModifier);
-				modLeftCtrl = false;
-				modRightCtrl = false;
-				modLeftAlt = false;
-				modRightAlt = false;
-				modLeftShift = false;
-				modRightShift = false;
-				modLeftWin = false;
-				modRightWin = false;
-
-				hkValid = (hotkeyVk != 0);
-				if (debug)
-					blog(LOG_INFO,
-					     "[Zoominator] Hotkey parsed: '%s' vk=%d ctrl=%d alt=%d shift=%d win=%d valid=%d",
-					     hotkeySequence.toUtf8().constData(), hotkeyVk, modCtrl ? 1 : 0,
-					     modAlt ? 1 : 0, modShift ? 1 : 0, modWin ? 1 : 0, hkValid ? 1 : 0);
-			}
-		}
-	} else {
-		hkValid = true;
+bool ZoominatorController::anyLevelHotkeyValid() const
+{
+	for (const ZoomLevel &lv : zoomLevels) {
+		if (lv.valid)
+			return true;
 	}
+	return false;
 }
 
 bool ZoominatorController::needsKeyboardHook() const
 {
-	return triggerType == "keyboard" || followToggleHkValid;
+	return anyLevelHotkeyValid() || followToggleHkValid;
 }
 
 bool ZoominatorController::needsMouseHook() const
 {
-	return triggerType == "mouse" || showCursorMarker;
+	/* The mouse hook only exists for the cursor halo now that no trigger can
+	 * be bound to a mouse button. */
+	return showCursorMarker;
 }
 
 void ZoominatorController::installHooks()

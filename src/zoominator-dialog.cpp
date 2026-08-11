@@ -79,16 +79,6 @@ static void frontend_event_cb(enum obs_frontend_event, void *data)
 	QMetaObject::invokeMethod(dlg, "refreshLists", Qt::QueuedConnection);
 }
 
-static QKeySequence sequence_without_modifiers(const QKeySequence &seq)
-{
-	if (seq.isEmpty())
-		return {};
-	const QKeyCombination kc = seq[0];
-	if (kc.key() == Qt::Key_unknown)
-		return {};
-	return QKeySequence(QKeyCombination(Qt::NoModifier, kc.key()));
-}
-
 static bool key_sequence_is_modifier_only(const QKeySequence &seq)
 {
 	if (seq.isEmpty())
@@ -198,12 +188,6 @@ void ZoominatorDialog::buildUi()
 		lay->addWidget(mkField(T("Dialog.TargetScreen"), cmbSource));
 		lay->addSpacing(16);
 
-		cmbMode = new QComboBox(page);
-		cmbMode->addItem(T("Dialog.Mode.Hold"), "hold");
-		cmbMode->addItem(T("Dialog.Mode.Toggle"), "toggle");
-		lay->addWidget(mkField(T("Dialog.Behavior"), cmbMode));
-		lay->addSpacing(16);
-
 		auto *followHkRow = new QWidget(page);
 		{
 			auto *h = new QHBoxLayout(followHkRow);
@@ -221,101 +205,7 @@ void ZoominatorDialog::buildUi()
 		tabWidget->addTab(page, T("Dialog.Tab.Target"));
 	}
 
-	{
-		auto *page = new QWidget;
-		auto *lay = new QVBoxLayout(page);
-		lay->setContentsMargins(20, 20, 20, 20);
-		lay->setSpacing(0);
-
-		cmbTrigger = new QComboBox(page);
-		cmbTrigger->addItem(T("Dialog.Trigger.Keyboard"), "keyboard");
-		cmbTrigger->addItem(T("Dialog.Trigger.MouseButton"), "mouse");
-		lay->addWidget(mkField(T("Dialog.TriggerType"), cmbTrigger));
-		lay->addSpacing(16);
-
-		rowHotkeyWidget = new QWidget(page);
-		{
-			auto *v = new QVBoxLayout(rowHotkeyWidget);
-			v->setContentsMargins(0, 0, 0, 0);
-			v->setSpacing(4);
-			v->addWidget(new QLabel(T("Dialog.Hotkey"), rowHotkeyWidget));
-			auto *h = new QHBoxLayout;
-			h->setSpacing(6);
-			editHotkey = new QKeySequenceEdit(rowHotkeyWidget);
-			btnClearHotkey = new QPushButton(T("Dialog.Clear"), rowHotkeyWidget);
-			btnClearHotkey->setToolTip(T("Dialog.ClearHotkeyTooltip"));
-			h->addWidget(editHotkey, 1);
-			h->addWidget(btnClearHotkey);
-			v->addLayout(h);
-		}
-		lay->addWidget(rowHotkeyWidget);
-
-		rowMouseWidget = new QWidget(page);
-		{
-			auto *v = new QVBoxLayout(rowMouseWidget);
-			v->setContentsMargins(0, 0, 0, 0);
-			v->setSpacing(4);
-			v->addWidget(new QLabel(T("Dialog.MouseButton"), rowMouseWidget));
-			cmbMouseBtn = new QComboBox(rowMouseWidget);
-			cmbMouseBtn->addItem(T("Dialog.Mouse.Left"), "left");
-			cmbMouseBtn->addItem(T("Dialog.Mouse.Right"), "right");
-			cmbMouseBtn->addItem(T("Dialog.Mouse.Middle"), "middle");
-			cmbMouseBtn->addItem("X1", "x1");
-			cmbMouseBtn->addItem("X2", "x2");
-			v->addWidget(cmbMouseBtn);
-		}
-		lay->addWidget(rowMouseWidget);
-		lay->addSpacing(16);
-
-		rowModifiersWidget = new QWidget(page);
-		{
-			auto *v = new QVBoxLayout(rowModifiersWidget);
-			v->setContentsMargins(0, 0, 0, 0);
-			v->setSpacing(6);
-			v->addWidget(new QLabel(T("Dialog.RequiredModifiers"), rowModifiersWidget));
-			auto *grid = new QGridLayout;
-			grid->setHorizontalSpacing(10);
-			grid->setVerticalSpacing(4);
-			chkCtrl = new QCheckBox(T("Dialog.Mod.CtrlAny"), rowModifiersWidget);
-			chkLeftCtrl = new QCheckBox(T("Dialog.Mod.LeftCtrl"), rowModifiersWidget);
-			chkRightCtrl = new QCheckBox(T("Dialog.Mod.RightCtrl"), rowModifiersWidget);
-			chkAlt = new QCheckBox(T("Dialog.Mod.AltAny"), rowModifiersWidget);
-			chkLeftAlt = new QCheckBox(T("Dialog.Mod.LeftAlt"), rowModifiersWidget);
-			chkRightAlt = new QCheckBox(T("Dialog.Mod.RightAlt"), rowModifiersWidget);
-			chkShift = new QCheckBox(T("Dialog.Mod.ShiftAny"), rowModifiersWidget);
-			chkLeftShift = new QCheckBox(T("Dialog.Mod.LeftShift"), rowModifiersWidget);
-			chkRightShift = new QCheckBox(T("Dialog.Mod.RightShift"), rowModifiersWidget);
-			chkWin = new QCheckBox(T("Dialog.Mod.MetaWinAny"), rowModifiersWidget);
-			chkLeftWin = new QCheckBox(T("Dialog.Mod.LeftMetaWin"), rowModifiersWidget);
-			chkRightWin = new QCheckBox(T("Dialog.Mod.RightMetaWin"), rowModifiersWidget);
-			grid->addWidget(chkCtrl, 0, 0);
-			grid->addWidget(chkLeftCtrl, 0, 1);
-			grid->addWidget(chkRightCtrl, 0, 2);
-			grid->addWidget(chkAlt, 1, 0);
-			grid->addWidget(chkLeftAlt, 1, 1);
-			grid->addWidget(chkRightAlt, 1, 2);
-			grid->addWidget(chkShift, 2, 0);
-			grid->addWidget(chkLeftShift, 2, 1);
-			grid->addWidget(chkRightShift, 2, 2);
-			grid->addWidget(chkWin, 3, 0);
-			grid->addWidget(chkLeftWin, 3, 1);
-			grid->addWidget(chkRightWin, 3, 2);
-			grid->addWidget(new QLabel(T("Dialog.ModifierHelp"), rowModifiersWidget), 4, 0, 1, 3);
-			grid->setColumnStretch(3, 1);
-			v->addLayout(grid);
-		}
-		lay->addWidget(rowModifiersWidget);
-
-		lay->addStretch(1);
-		tabWidget->addTab(page, T("Dialog.Tab.Trigger"));
-
-		connect(cmbTrigger, &QComboBox::currentIndexChanged, this, [this](int) {
-			const bool isMouse = (cmbTrigger->currentData().toString() == "mouse");
-			rowHotkeyWidget->setVisible(!isMouse);
-			rowMouseWidget->setVisible(isMouse);
-			rowModifiersWidget->setVisible(isMouse);
-		});
-	}
+	buildZoomLevelsTab();
 
 	{
 		auto *page = new QWidget;
@@ -323,32 +213,7 @@ void ZoominatorDialog::buildUi()
 		lay->setContentsMargins(20, 8, 20, 20);
 		lay->setSpacing(0);
 
-		addSection(lay, T("Dialog.Section.Zoom"), true);
-
-		spZoom = new QDoubleSpinBox(page);
-		spZoom->setRange(0.0, 8.0);
-		spZoom->setSingleStep(0.05);
-		spZoom->setDecimals(2);
-		spZoom->setToolTip(T("Dialog.ZoomFactorTooltip"));
-
-		spIn = new QSpinBox(page);
-		spIn->setRange(0, 5000);
-		spIn->setSingleStep(10);
-		spIn->setSuffix(T("Unit.Milliseconds"));
-
-		spOut = new QSpinBox(page);
-		spOut->setRange(0, 5000);
-		spOut->setSingleStep(10);
-		spOut->setSuffix(T("Unit.Milliseconds"));
-
-		auto *zoomRow = new QHBoxLayout;
-		zoomRow->setSpacing(12);
-		zoomRow->addWidget(mkField(T("Dialog.ZoomFactor"), spZoom), 1);
-		zoomRow->addWidget(mkField(T("Dialog.AnimateIn"), spIn), 1);
-		zoomRow->addWidget(mkField(T("Dialog.AnimateOut"), spOut), 1);
-		lay->addLayout(zoomRow);
-
-		addSection(lay, T("Dialog.Section.MouseFollow"));
+		addSection(lay, T("Dialog.Section.MouseFollow"), true);
 
 		chkFollow = new QCheckBox(T("Dialog.Enable"), page);
 		chkFollow->setToolTip(T("Dialog.FollowTooltip"));
@@ -471,9 +336,79 @@ void ZoominatorDialog::buildUi()
 	connect(btnRefresh, &QPushButton::clicked, this, &ZoominatorDialog::refreshLists);
 	connect(btnApply, &QPushButton::clicked, this, &ZoominatorDialog::applyToController);
 	connect(btnTest, &QPushButton::clicked, this, &ZoominatorDialog::testZoom);
-	connect(btnClearHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearHotkey);
 	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearFollowToggleHotkey);
 	connect(btnMarkerColor, &QPushButton::clicked, this, &ZoominatorDialog::chooseMarkerColor);
+}
+
+void ZoominatorDialog::buildZoomLevelsTab()
+{
+	auto *page = new QWidget;
+	auto *lay = new QVBoxLayout(page);
+	lay->setContentsMargins(20, 16, 20, 20);
+	lay->setSpacing(10);
+
+	auto *info = new QLabel(T("Dialog.ZoomLevels.Help"), page);
+	info->setWordWrap(true);
+	lay->addWidget(info);
+
+	auto *grid = new QGridLayout;
+	grid->setHorizontalSpacing(10);
+	grid->setVerticalSpacing(6);
+
+	const QString headers[] = {T("Dialog.ZoomLevels.Level"), T("Dialog.ZoomFactor"), T("Dialog.AnimateIn"),
+				   T("Dialog.AnimateOut"), T("Dialog.Hotkey")};
+	for (int col = 0; col < 5; ++col) {
+		auto *lbl = new QLabel(QStringLiteral("<b>%1</b>").arg(headers[col]), page);
+		grid->addWidget(lbl, 0, col);
+	}
+
+	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+		LevelRow &row = levelRows[i];
+		const int r = i + 1;
+
+		grid->addWidget(new QLabel(QString::number(r), page), r, 0);
+
+		row.zoom = new QDoubleSpinBox(page);
+		row.zoom->setRange(1.0, 8.0);
+		row.zoom->setSingleStep(0.05);
+		row.zoom->setDecimals(2);
+		row.zoom->setToolTip(T("Dialog.ZoomFactorTooltip"));
+		grid->addWidget(row.zoom, r, 1);
+
+		row.in = new QSpinBox(page);
+		row.in->setRange(0, 10000);
+		row.in->setSingleStep(50);
+		row.in->setSuffix(T("Unit.Milliseconds"));
+		row.in->setToolTip(T("Dialog.ZoomLevels.AnimateInTooltip"));
+		grid->addWidget(row.in, r, 2);
+
+		row.out = new QSpinBox(page);
+		row.out->setRange(0, 10000);
+		row.out->setSingleStep(50);
+		row.out->setSuffix(T("Unit.Milliseconds"));
+		row.out->setToolTip(T("Dialog.ZoomLevels.AnimateOutTooltip"));
+		grid->addWidget(row.out, r, 3);
+
+		row.hotkey = new QKeySequenceEdit(page);
+		grid->addWidget(row.hotkey, r, 4);
+
+		row.clear = new QPushButton(T("Dialog.Clear"), page);
+		row.clear->setToolTip(T("Dialog.ZoomLevels.ClearHotkeyTooltip"));
+		grid->addWidget(row.clear, r, 5);
+
+		connect(row.clear, &QPushButton::clicked, this,
+			[this, i]() { levelRows[i].hotkey->setKeySequence(QKeySequence()); });
+	}
+
+	grid->setColumnStretch(4, 1);
+	lay->addLayout(grid);
+
+	auto *timing = new QLabel(T("Dialog.ZoomLevels.TimingHelp"), page);
+	timing->setWordWrap(true);
+	lay->addWidget(timing);
+
+	lay->addStretch(1);
+	tabWidget->addTab(page, T("Dialog.Tab.ZoomLevels"));
 }
 
 void ZoominatorDialog::populateSourcesTab()
@@ -610,51 +545,22 @@ void ZoominatorDialog::loadFromController()
 	refreshLists();
 
 	{
-		int idx = cmbSource->findData(c.screenKey);
+		const int idx = cmbSource->findData(c.screenKey);
 		if (idx >= 0)
 			cmbSource->setCurrentIndex(idx);
-
-		idx = cmbMode->findData(c.hotkeyMode);
-		if (idx >= 0)
-			cmbMode->setCurrentIndex(idx);
 
 		editFollowToggleHotkey->setKeySequence(QKeySequence(c.followToggleHotkeySequence));
 	}
 
-	{
-		int idx = cmbTrigger->findData(c.triggerType);
-		if (idx >= 0)
-			cmbTrigger->setCurrentIndex(idx);
-
-		idx = cmbMouseBtn->findData(c.mouseButton);
-		if (idx >= 0)
-			cmbMouseBtn->setCurrentIndex(idx);
-
-		chkCtrl->setChecked(c.modCtrl);
-		chkLeftCtrl->setChecked(c.modLeftCtrl);
-		chkAlt->setChecked(c.modAlt);
-		chkLeftAlt->setChecked(c.modLeftAlt);
-		chkShift->setChecked(c.modShift);
-		chkLeftShift->setChecked(c.modLeftShift);
-		chkWin->setChecked(c.modWin);
-		chkLeftWin->setChecked(c.modLeftWin);
-		chkRightCtrl->setChecked(c.modRightCtrl);
-		chkRightAlt->setChecked(c.modRightAlt);
-		chkRightShift->setChecked(c.modRightShift);
-		chkRightWin->setChecked(c.modRightWin);
-
-		editHotkey->setKeySequence(QKeySequence(c.hotkeySequence));
-
-		const bool isMouse = (c.triggerType == "mouse");
-		rowHotkeyWidget->setVisible(!isMouse);
-		rowMouseWidget->setVisible(isMouse);
-		rowModifiersWidget->setVisible(isMouse);
+	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+		const auto &lv = c.zoomLevels[i];
+		levelRows[i].zoom->setValue(lv.zoom);
+		levelRows[i].in->setValue(lv.inMs);
+		levelRows[i].out->setValue(lv.outMs);
+		levelRows[i].hotkey->setKeySequence(QKeySequence(lv.hotkey));
 	}
 
 	{
-		spZoom->setValue(c.zoomFactor);
-		spIn->setValue(c.animInMs);
-		spOut->setValue(c.animOutMs);
 		chkFollow->setChecked(c.followMouse);
 		spFollowSpeed->setValue(c.followSpeed);
 		chkCenterCursorUntilEdge->setChecked(c.centerCursorUntilEdge);
@@ -682,36 +588,20 @@ void ZoominatorDialog::applyToController()
 	auto &c = ZoominatorController::instance();
 
 	c.screenKey = cmbSource->currentData().toString();
-	c.hotkeyMode = cmbMode->currentData().toString();
 	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
 
-	c.triggerType = cmbTrigger->currentData().toString();
-	c.mouseButton = cmbMouseBtn->currentData().toString();
+	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+		auto &lv = c.zoomLevels[i];
+		lv.zoom = levelRows[i].zoom->value();
+		lv.inMs = levelRows[i].in->value();
+		lv.outMs = levelRows[i].out->value();
 
-	c.modCtrl = chkCtrl->isChecked();
-	c.modLeftCtrl = chkLeftCtrl->isChecked();
-	c.modAlt = chkAlt->isChecked();
-	c.modLeftAlt = chkLeftAlt->isChecked();
-	c.modShift = chkShift->isChecked();
-	c.modLeftShift = chkLeftShift->isChecked();
-	c.modWin = chkWin->isChecked();
-	c.modLeftWin = chkLeftWin->isChecked();
-	c.modRightCtrl = chkRightCtrl->isChecked();
-	c.modRightAlt = chkRightAlt->isChecked();
-	c.modRightShift = chkRightShift->isChecked();
-	c.modRightWin = chkRightWin->isChecked();
-
-	QKeySequence triggerSequence = editHotkey->keySequence();
-	if (!key_sequence_is_modifier_only(triggerSequence) &&
-	    (c.modCtrl || c.modAlt || c.modShift || c.modWin || c.modLeftCtrl || c.modRightCtrl || c.modLeftAlt ||
-	     c.modRightAlt || c.modLeftShift || c.modRightShift || c.modLeftWin || c.modRightWin)) {
-		triggerSequence = sequence_without_modifiers(triggerSequence);
+		/* A bare modifier cannot be a level key - the controller rejects it -
+		 * so drop it here rather than silently storing a dead binding. */
+		const QKeySequence seq = levelRows[i].hotkey->keySequence();
+		lv.hotkey = key_sequence_is_modifier_only(seq) ? QString() : seq.toString(QKeySequence::NativeText);
 	}
-	c.hotkeySequence = triggerSequence.toString(QKeySequence::NativeText);
 
-	c.zoomFactor = spZoom->value();
-	c.animInMs = spIn->value();
-	c.animOutMs = spOut->value();
 	c.followMouse = chkFollow->isChecked();
 	c.followSpeed = spFollowSpeed->value();
 	c.centerCursorUntilEdge = chkCenterCursorUntilEdge->isChecked();
@@ -743,11 +633,6 @@ void ZoominatorDialog::testZoom()
 {
 	applyToController();
 	lblStatus->setText(T("Dialog.TestStatus"));
-}
-
-void ZoominatorDialog::clearHotkey()
-{
-	editHotkey->setKeySequence(QKeySequence());
 }
 
 void ZoominatorDialog::clearFollowToggleHotkey()

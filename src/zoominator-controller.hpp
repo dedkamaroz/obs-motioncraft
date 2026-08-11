@@ -45,28 +45,31 @@ public:
 	void rebuildRuntimeHooks();
 
 	QString screenKey;
-	QString hotkeySequence;
-	QString hotkeyMode;
 	QString followToggleHotkeySequence;
 
-	QString triggerType;
-	QString mouseButton;
-	bool modCtrl = false;
-	bool modAlt = false;
-	bool modShift = false;
-	bool modWin = false;
-	bool modLeftCtrl = false;
-	bool modRightCtrl = false;
-	bool modLeftAlt = false;
-	bool modRightAlt = false;
-	bool modLeftShift = false;
-	bool modRightShift = false;
-	bool modLeftWin = false;
-	bool modRightWin = false;
+	/* One assignable zoom level. `inMs` / `outMs` are not segment durations:
+	 * they are time coordinates on a timeline whose origin is the unzoomed
+	 * state, so inMs is "how long a zoom in from 1.0 to this level takes".
+	 * The duration of any other transition is the distance between the two
+	 * endpoints on that timeline - see timelineMsForZoom(). */
+	struct ZoomLevel {
+		double zoom = 1.0;
+		int inMs = 0;
+		int outMs = 0;
+		QString hotkey;
 
-	double zoomFactor = 2.0;
-	int animInMs = 180;
-	int animOutMs = 180;
+		/* Derived by rebuildTriggersFromSettings(); not persisted. */
+		int vk = 0;
+		bool valid = false;
+		bool modCtrl = false;
+		bool modAlt = false;
+		bool modShift = false;
+		bool modWin = false;
+	};
+
+	static constexpr int kZoomLevelCount = 5;
+	ZoomLevel zoomLevels[kZoomLevelCount];
+
 	bool followMouse = true;
 	bool followMouseRuntimeEnabled = true;
 	double followSpeed = 8.0;
@@ -97,20 +100,21 @@ private:
 	QString configPath() const;
 
 	void ensureTicking(bool on);
-	void startZoomIn();
-	void startZoomOut();
 	void resetState();
 	void rebuildTriggersFromSettings();
 	void installHooks();
 	void uninstallHooks();
 	bool needsKeyboardHook() const;
 	bool needsMouseHook() const;
-	void onTriggerDown();
-	void onTriggerUp();
+	bool anyLevelHotkeyValid() const;
 	void toggleFollowMouseRuntime();
-	bool triggerMatchesKeyboard(int vk) const;
-	bool triggerMatchesMouse(unsigned int msg, unsigned short mouseData) const;
-	bool modsMatch() const;
+
+	/* Level 0 is the unzoomed state; 1..kZoomLevelCount index zoomLevels[].
+	 * Pressing the hotkey of the level already requested returns to 0. */
+	void activateLevel(int level);
+	double levelZoom(int level) const;
+	double timelineMsForZoom(double z, bool zoomingIn) const;
+	void beginSegment(int level);
 
 	bool getSelectedScreenRect(int &x, int &y, int &w, int &h) const;
 	void enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const;
@@ -135,7 +139,7 @@ private:
 	bool captureMarkerClickPosition();
 	bool isMarkerFlashActive(qint64 nowMs) const;
 	int currentMarkerOpacity(qint64 nowMs);
-	void applyZoomToScene(double t);
+	void applyZoomToScene(double z);
 
 	/* Split loop. Frame-critical work runs on OBS's graphics thread via
 	 * obs_add_tick_callback so the transform lands exactly once per rendered
@@ -168,15 +172,34 @@ private:
 	std::atomic<bool> pendingFinish{false};
 
 	QTimer tickTimer;
-	bool zoomPressed = false;
-	bool zoomLatched = false;
 	/* Release-stored by the main thread once capture completes, acquire-loaded
 	 * by the graphics thread; that ordering is what makes sceneItems safe to
 	 * read there without holding a lock across the transform writes. */
 	std::atomic<bool> zoomActive{false};
 
-	double animT = 0.0;
-	std::atomic<int> animDir{0};
+	/* Last level the user asked for. Main-thread only: it is the toggle state,
+	 * not the animation state, so it must not be disturbed by the tick. */
+	int requestedLevel = 0;
+
+	/* A transition is one cubic Hermite segment from (segZ0, segV0) to
+	 * (segZ1, 0) over segDurSec. Carrying the entry velocity is what keeps an
+	 * interrupted transition from changing speed abruptly; with segV0 == 0 the
+	 * curve reduces exactly to segZ0 + (segZ1 - segZ0) * smoothstep(u), which
+	 * is the ramp every uninterrupted zoom uses. */
+	double segZ0 = 1.0;
+	double segZ1 = 1.0;
+	double segV0 = 0.0;
+	double segDurSec = 0.0;
+	double segU = 1.0;
+	double currentZoom = 1.0;
+	double currentZoomVel = 0.0;
+
+	/* Published by the main thread (hook callbacks), consumed by the graphics
+	 * thread, which is the only place the current zoom and velocity are known
+	 * and therefore the only place a new segment can be seeded. */
+	std::atomic<int> targetLevel{0};
+	std::atomic<bool> retargetRequested{false};
+	std::atomic<bool> segmentRunning{false};
 
 	bool followHasPos = false;
 	float followX = 0.0f;
@@ -255,8 +278,6 @@ private:
 	QPointer<ZoominatorDialog> dialog;
 	obs_source_t *markerSource = nullptr;
 
-	int hotkeyVk = 0;
-	bool hkValid = false;
 	int followToggleHotkeyVk = 0;
 	bool followToggleHkValid = false;
 	bool followToggleModCtrl = false;
