@@ -347,6 +347,10 @@ void ZoominatorDialog::buildZoomLevelsTab()
 	lay->setContentsMargins(20, 16, 20, 20);
 	lay->setSpacing(10);
 
+	chkHotkeysEnabled = new QCheckBox(T("Dialog.HotkeysEnabled"), page);
+	chkHotkeysEnabled->setToolTip(T("Dialog.HotkeysEnabledTooltip"));
+	lay->addWidget(chkHotkeysEnabled);
+
 	auto *info = new QLabel(T("Dialog.ZoomLevels.Help"), page);
 	info->setWordWrap(true);
 	lay->addWidget(info);
@@ -552,6 +556,8 @@ void ZoominatorDialog::loadFromController()
 		editFollowToggleHotkey->setKeySequence(QKeySequence(c.followToggleHotkeySequence));
 	}
 
+	chkHotkeysEnabled->setChecked(c.hotkeysEnabled);
+
 	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
 		const auto &lv = c.zoomLevels[i];
 		levelRows[i].zoom->setValue(lv.zoom);
@@ -589,6 +595,8 @@ void ZoominatorDialog::applyToController()
 
 	c.screenKey = cmbSource->currentData().toString();
 	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
+
+	c.hotkeysEnabled = chkHotkeysEnabled->isChecked();
 
 	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
 		auto &lv = c.zoomLevels[i];

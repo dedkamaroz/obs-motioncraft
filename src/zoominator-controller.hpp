@@ -70,6 +70,11 @@ public:
 	static constexpr int kZoomLevelCount = 5;
 	ZoomLevel zoomLevels[kZoomLevelCount];
 
+	/* Master switch for every hotkey the plugin listens for - the level keys
+	 * and the Follow Mouse toggle. Off means the keyboard hook is not
+	 * installed at all, so nothing is intercepted system-wide. */
+	bool hotkeysEnabled = true;
+
 	bool followMouse = true;
 	bool followMouseRuntimeEnabled = true;
 	double followSpeed = 8.0;
@@ -110,8 +115,10 @@ private:
 	void toggleFollowMouseRuntime();
 
 	/* Level 0 is the unzoomed state; 1..kZoomLevelCount index zoomLevels[].
-	 * Pressing the hotkey of the level already requested returns to 0. */
+	 * activateLevel is the hotkey path and toggles: pressing the key of the
+	 * level already requested returns to 0. requestLevel is the absolute form. */
 	void activateLevel(int level);
+	void requestLevel(int next);
 	double levelZoom(int level) const;
 	double timelineMsForZoom(double z, bool zoomingIn) const;
 	void beginSegment(int level);

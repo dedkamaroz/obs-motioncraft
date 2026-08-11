@@ -594,6 +594,7 @@ void ZoominatorController::loadSettings()
 		zoomLevels[i].outMs = kLevelDefaults[i].outMs;
 	}
 
+	hotkeysEnabled = true;
 	followMouse = true;
 	followMouseRuntimeEnabled = true;
 	followSpeed = 8.0;
@@ -742,6 +743,9 @@ void ZoominatorController::loadSettings()
 		lv.outMs = std::clamp(lv.outMs, 0, 10000);
 	}
 
+	if (obs_data_has_user_value(data, "hotkeys_enabled"))
+		hotkeysEnabled = obs_data_get_bool(data, "hotkeys_enabled");
+
 	if (obs_data_has_user_value(data, "follow_mouse"))
 		followMouse = obs_data_get_bool(data, "follow_mouse");
 	followMouseRuntimeEnabled = true;
@@ -829,6 +833,7 @@ void ZoominatorController::saveSettings()
 	obs_data_set_array(data, "zoom_levels", levelArr);
 	obs_data_array_release(levelArr);
 
+	obs_data_set_bool(data, "hotkeys_enabled", hotkeysEnabled);
 	obs_data_set_bool(data, "follow_mouse", followMouse);
 	followMouseRuntimeEnabled = true;
 	obs_data_set_double(data, "follow_speed", followSpeed);
@@ -867,6 +872,13 @@ void ZoominatorController::saveSettings()
 void ZoominatorController::rebuildRuntimeHooks()
 {
 	rebuildTriggersFromSettings();
+
+	/* Turning the hotkeys off while zoomed would otherwise strand the scene
+	 * there with no key left to bring it back. Ride it out normally so the
+	 * transforms are restored the same way they always are. */
+	if (!hotkeysEnabled && requestedLevel != 0)
+		requestLevel(0);
+
 	uninstallHooks();
 	installHooks();
 }
@@ -957,25 +969,38 @@ void ZoominatorController::beginSegment(int level)
 
 void ZoominatorController::activateLevel(int level)
 {
-	if (level < 1 || level > kZoomLevelCount)
+	if (!hotkeysEnabled || level < 1 || level > kZoomLevelCount)
 		return;
 
 	/* The graphics thread flags a completed unzoom and the Qt timer does the
-	 * actual teardown up to a frame later. A key pressed inside that gap would
-	 * otherwise re-capture the still-normalized transforms as if they were the
-	 * originals, permanently losing the item's real bounds type and alignment.
-	 * Finish first, then start clean. */
+	 * actual teardown up to a frame later. Draining it here as well as in
+	 * requestLevel matters: requestedLevel is read below to decide the toggle,
+	 * and the teardown is what resets it. */
 	if (pendingFinish.exchange(false))
 		finishZoomOnMainThread();
 
 	/* A level configured at 1.0 is not a zoom, so treat its key as "go back to
 	 * unzoomed" rather than as a level you can sit at. */
 	const int pressed = (levelZoom(level) > 1.0) ? level : 0;
-	const int next = (requestedLevel == pressed) ? 0 : pressed;
+	logi(debug, "[Zoominator] Level key %d pressed while at level %d", level, requestedLevel);
+	requestLevel((requestedLevel == pressed) ? 0 : pressed);
+}
+
+void ZoominatorController::requestLevel(int next)
+{
+	/* A level requested inside the teardown gap would otherwise re-capture the
+	 * still-normalized transforms as if they were the originals, permanently
+	 * losing the item's real bounds type and alignment. Finish, then start clean. */
+	if (pendingFinish.exchange(false))
+		finishZoomOnMainThread();
+
 	const int previous = requestedLevel;
 	requestedLevel = next;
 
-	logi(debug, "[Zoominator] Level key %d: %d -> %d", level, previous, next);
+	logi(debug, "[Zoominator] Zoom level %d -> %d", previous, next);
+
+	if (previous == 0 && next == 0)
+		return;
 
 	if (previous == 0 && next != 0) {
 		/* Leaving rest. Everything the follow-mouse anchor derives from has to
@@ -3043,7 +3068,7 @@ LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LP
 
 		const int vk = (int)k->vkCode;
 
-		if (g_ctl->followToggleHkValid && down && g_ctl->followToggleHotkeyVk != 0 &&
+		if (g_ctl->hotkeysEnabled && g_ctl->followToggleHkValid && down && g_ctl->followToggleHotkeyVk != 0 &&
 		    vk_matches(vk, g_ctl->followToggleHotkeyVk) &&
 		    mods_current(g_ctl->followToggleModCtrl, g_ctl->followToggleModAlt, g_ctl->followToggleModShift,
 				 g_ctl->followToggleModWin)) {
@@ -3114,7 +3139,9 @@ CGEventRef ZoominatorController::eventTapCallback(CGEventTapProxy proxy, CGEvent
 		const int keycode = (int)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
 		const bool down = (type == kCGEventKeyDown);
 
-		if (ctl->followToggleHkValid && down && ctl->followToggleHotkeyVk != 0 &&
+		/* The macOS event tap is shared with the cursor-halo mouse path, so it
+		 * stays installed even with hotkeys off; the gate has to be here. */
+		if (ctl->hotkeysEnabled && ctl->followToggleHkValid && down && ctl->followToggleHotkeyVk != 0 &&
 		    vk_matches(keycode, ctl->followToggleHotkeyVk) &&
 		    mods_current(ctl->followToggleModCtrl, ctl->followToggleModAlt, ctl->followToggleModShift,
 				 ctl->followToggleModWin)) {
@@ -3185,7 +3212,9 @@ void ZoominatorController::processXInput2Events()
 			KeySym sym = XkbKeycodeToKeysym(xiDisplay, keycode, 0, 0);
 			const bool down = (evtype == XI_RawKeyPress);
 
-			if (followToggleHkValid && down && followToggleHotkeyVk != 0 &&
+			/* Same as macOS: one XInput2 connection serves both the keys and
+			 * the cursor halo, so it can outlive the hotkeys being disabled. */
+			if (hotkeysEnabled && followToggleHkValid && down && followToggleHotkeyVk != 0 &&
 			    vk_matches((int)sym, followToggleHotkeyVk) &&
 			    mods_current(followToggleModCtrl, followToggleModAlt, followToggleModShift,
 					 followToggleModWin)) {
@@ -3621,7 +3650,7 @@ bool ZoominatorController::anyLevelHotkeyValid() const
 
 bool ZoominatorController::needsKeyboardHook() const
 {
-	return anyLevelHotkeyValid() || followToggleHkValid;
+	return hotkeysEnabled && (anyLevelHotkeyValid() || followToggleHkValid);
 }
 
 bool ZoominatorController::needsMouseHook() const

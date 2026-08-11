@@ -54,6 +54,7 @@ private:
 		QPushButton *clear = nullptr;
 	};
 	LevelRow levelRows[5];
+	QCheckBox *chkHotkeysEnabled = nullptr;
 
 	QCheckBox *chkFollow = nullptr;
 	QDoubleSpinBox *spFollowSpeed = nullptr;
