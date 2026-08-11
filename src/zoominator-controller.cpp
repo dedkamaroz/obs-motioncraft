@@ -2446,7 +2446,7 @@ void ZoominatorController::captureOriginalSceneItems(const std::vector<obs_scene
 	if (recoveryActive && !sceneItems.empty())
 		saveSettings();
 
-	for (const auto &state : sceneItems) {
+	for (auto &state : sceneItems) {
 		if (!state.item || !state.orig.valid)
 			continue;
 		/* Hidden items are still transformed (so they stay consistent if they
@@ -2490,6 +2490,12 @@ void ZoominatorController::captureOriginalSceneItems(const std::vector<obs_scene
 			minY = std::min(minY, py);
 			maxY = std::max(maxY, py);
 		}
+
+		state.framesContent = true;
+		state.framingMin.x = minX;
+		state.framingMin.y = minY;
+		state.framingMax.x = maxX;
+		state.framingMax.y = maxY;
 
 		if (!sceneContentBoundsValid) {
 			sceneContentMin.x = minX;
@@ -2680,6 +2686,49 @@ void ZoominatorController::applyZoomToScene(double z)
 		markerHasPoint = true;
 	}
 
+	/* Framing clamp. The permitted pan is the INTERSECTION of the per-item
+	 * intervals, not the interval of their union.
+	 *
+	 * The union is defined by the largest item, so it carries that item's slack
+	 * against the canvas edge. Any targeted item smaller than the union can be
+	 * panned right off the edge while the union still reports itself covered,
+	 * and the canvas background shows through behind the smaller layers. A
+	 * source whose bounds box overhangs the canvas is enough to trigger it: it
+	 * frames itself and lets every other layer slide.
+	 *
+	 * Items too small to cover the canvas at this zoom are skipped rather than
+	 * allowed to empty the intersection - a small overlay cannot frame anything
+	 * and must not veto the items that can. If nothing can cover, or the items
+	 * that can disagree, fall back to the union so the behaviour degrades to
+	 * what it was rather than to something undefined. */
+	double loX = 0.0, hiX = 0.0, loY = 0.0, hiY = 0.0;
+	bool haveX = false, haveY = false;
+
+	for (const auto &state : sceneItems) {
+		if (!state.framesContent || !state.orig.valid || !isLiveItem(state.item))
+			continue;
+
+		const double itemMinX = (double)anchorX + ((double)state.framingMin.x - (double)fx) * z;
+		const double itemMaxX = (double)anchorX + ((double)state.framingMax.x - (double)fx) * z;
+		const double itemLoX = cw - itemMaxX;
+		const double itemHiX = -itemMinX;
+		if (itemLoX <= itemHiX) {
+			loX = haveX ? std::max(loX, itemLoX) : itemLoX;
+			hiX = haveX ? std::min(hiX, itemHiX) : itemHiX;
+			haveX = true;
+		}
+
+		const double itemMinY = (double)anchorY + ((double)state.framingMin.y - (double)fy) * z;
+		const double itemMaxY = (double)anchorY + ((double)state.framingMax.y - (double)fy) * z;
+		const double itemLoY = ch - itemMaxY;
+		const double itemHiY = -itemMinY;
+		if (itemLoY <= itemHiY) {
+			loY = haveY ? std::max(loY, itemLoY) : itemLoY;
+			hiY = haveY ? std::min(hiY, itemHiY) : itemHiY;
+			haveY = true;
+		}
+	}
+
 	const double baseMinX = sceneContentBoundsValid ? (double)sceneContentMin.x : 0.0;
 	const double baseMinY = sceneContentBoundsValid ? (double)sceneContentMin.y : 0.0;
 	const double baseMaxX = sceneContentBoundsValid ? (double)sceneContentMax.x : cw;
@@ -2696,13 +2745,17 @@ void ZoominatorController::applyZoomToScene(double z)
 	double offsetX = 0.0;
 	double offsetY = 0.0;
 
-	if (minOffsetX <= maxOffsetX) {
+	if (haveX && loX <= hiX) {
+		offsetX = clampd(0.0, loX, hiX);
+	} else if (minOffsetX <= maxOffsetX) {
 		offsetX = clampd(0.0, minOffsetX, maxOffsetX);
 	} else {
 		offsetX = (minOffsetX + maxOffsetX) * 0.5;
 	}
 
-	if (minOffsetY <= maxOffsetY) {
+	if (haveY && loY <= hiY) {
+		offsetY = clampd(0.0, loY, hiY);
+	} else if (minOffsetY <= maxOffsetY) {
 		offsetY = clampd(0.0, minOffsetY, maxOffsetY);
 	} else {
 		offsetY = (minOffsetY + maxOffsetY) * 0.5;

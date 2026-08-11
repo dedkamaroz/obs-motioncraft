@@ -258,6 +258,13 @@ private:
 		bool lastAppliedValid = false;
 		vec2 lastAppliedPos{};
 		vec2 lastAppliedScale{};
+
+		/* Unzoomed on-screen bounds of this item alone, used by the framing
+		 * clamp. False for items that were hidden when the zoom started: they
+		 * show nothing, so they must not constrain the framing. */
+		bool framesContent = false;
+		vec2 framingMin{};
+		vec2 framingMax{};
 	};
 
 	QString sceneItemKey(obs_sceneitem_t *item) const;
