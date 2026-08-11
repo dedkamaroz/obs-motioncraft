@@ -112,6 +112,7 @@ private:
 	bool needsKeyboardHook() const;
 	bool needsMouseHook() const;
 	bool anyLevelHotkeyValid() const;
+	bool hotkeyFocusAllows() const;
 	void toggleFollowMouseRuntime();
 
 	/* Level 0 is the unzoomed state; 1..kZoomLevelCount index zoomLevels[].

@@ -2,6 +2,7 @@
 
 #include <obs-frontend-api.h>
 #include <obs.h>
+#include <util/config-file.h>
 #include <util/platform.h>
 
 #include <QGuiApplication>
@@ -969,7 +970,10 @@ void ZoominatorController::beginSegment(int level)
 
 void ZoominatorController::activateLevel(int level)
 {
-	if (!hotkeysEnabled || level < 1 || level > kZoomLevelCount)
+	/* Gated here rather than in each platform's hook so no backend can drift.
+	 * requestLevel() is deliberately not gated: it is also the path that
+	 * unwinds a zoom when the hotkeys are switched off. */
+	if (!hotkeysEnabled || !hotkeyFocusAllows() || level < 1 || level > kZoomLevelCount)
 		return;
 
 	/* The graphics thread flags a completed unzoom and the Qt timer does the
@@ -3300,6 +3304,10 @@ void ZoominatorController::processXInput2Events()
 
 void ZoominatorController::toggleFollowMouseRuntime()
 {
+	/* Only ever reached from a hotkey, so it obeys the same focus policy. */
+	if (!hotkeysEnabled || !hotkeyFocusAllows())
+		return;
+
 	followMouseRuntimeEnabled = !followMouseRuntimeEnabled;
 	if (!followMouseRuntimeEnabled && followHasPos) {
 		targetX = followX;
@@ -3690,6 +3698,43 @@ void ZoominatorController::rebuildTriggersFromSettings()
 				      (followToggleModCtrl || followToggleModAlt || followToggleModShift ||
 				       followToggleModWin || key != 0);
 	}
+}
+
+/* OBS's Settings -> Advanced -> Hotkeys policy, applied to our own hooks.
+ *
+ * OBS enforces this by calling obs_hotkey_enable_background_press() whenever
+ * the application activation state changes. This plugin does not register
+ * obs_hotkey_* entries - it installs low-level OS hooks so triggers work while
+ * other applications have focus - so that call never reaches it and the setting
+ * was simply ignored. Mirrors OBSApp::UpdateHotkeyFocusSetting and
+ * ResetHotkeyState, including their definition of "in focus" as the whole
+ * application being active rather than one specific window, so OBS dialogs and
+ * floating docks count as focused just as they do for built-in hotkeys.
+ *
+ * Read fresh rather than cached so a change in OBS's settings applies at once.
+ * Called only once a hotkey has already matched, so ordinary typing never
+ * reaches it. */
+bool ZoominatorController::hotkeyFocusAllows() const
+{
+	config_t *cfg = obs_frontend_get_user_config();
+	if (!cfg)
+		return true;
+
+	const char *focusType = config_get_string(cfg, "General", "HotkeyFocusType");
+	if (!focusType || !*focusType)
+		return true;
+
+	bool enableInFocus = true;
+	bool enableOutOfFocus = true;
+
+	const QString policy = QString::fromUtf8(focusType);
+	if (policy.compare(QStringLiteral("DisableHotkeysInFocus"), Qt::CaseInsensitive) == 0)
+		enableInFocus = false;
+	else if (policy.compare(QStringLiteral("DisableHotkeysOutOfFocus"), Qt::CaseInsensitive) == 0)
+		enableOutOfFocus = false;
+
+	const bool inFocus = (QGuiApplication::applicationState() == Qt::ApplicationActive);
+	return inFocus ? enableInFocus : enableOutOfFocus;
 }
 
 bool ZoominatorController::anyLevelHotkeyValid() const
