@@ -3792,9 +3792,40 @@ static bool mods_current(bool wantCtrl, bool wantAlt, bool wantShift, bool wantW
 #endif
 
 #ifdef _WIN32
+/* Keys that exist on both the number pad and the main block.
+ *
+ * Qt reports the same Qt::Key for both - the pad differs only by a modifier
+ * flag, which a stored key sequence does not carry - so a binding made on one
+ * arrives as the other's virtual key and never matches. That is why binding
+ * the pad's decimal point only ever answered to the main full stop.
+ *
+ * Treating them as one key is what the digits have always done here; this is
+ * the rest of the pad brought into line. */
+static bool numpad_twins(int a, int b)
+{
+	static const struct {
+		int mainBlock;
+		int numPad;
+	} kTwins[] = {
+		{VK_OEM_PERIOD, VK_DECIMAL},
+		{VK_OEM_PLUS, VK_ADD},
+		{VK_OEM_MINUS, VK_SUBTRACT},
+		{VK_OEM_2, VK_DIVIDE},
+	};
+
+	for (const auto &t : kTwins) {
+		if ((a == t.mainBlock && b == t.numPad) || (a == t.numPad && b == t.mainBlock))
+			return true;
+	}
+	return false;
+}
+
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
+		return true;
+
+	if (numpad_twins(pressedVk, wantVk))
 		return true;
 
 	if (wantVk >= '0' && wantVk <= '9') {
@@ -3871,9 +3902,33 @@ LRESULT CALLBACK MotionCraftController::mouse_hook_proc(int nCode, WPARAM wParam
 #endif
 
 #ifdef __APPLE__
+/* See the Windows copy for why the pad and the main block have to be treated
+ * as the same key: Qt reports one Qt::Key for both. */
+static bool numpad_twins(int a, int b)
+{
+	static const struct {
+		int mainBlock;
+		int numPad;
+	} kTwins[] = {
+		{kVK_ANSI_Period, kVK_ANSI_KeypadDecimal},
+		{kVK_ANSI_Equal, kVK_ANSI_KeypadPlus},
+		{kVK_ANSI_Minus, kVK_ANSI_KeypadMinus},
+		{kVK_ANSI_Slash, kVK_ANSI_KeypadDivide},
+	};
+
+	for (const auto &t : kTwins) {
+		if ((a == t.mainBlock && b == t.numPad) || (a == t.numPad && b == t.mainBlock))
+			return true;
+	}
+	return false;
+}
+
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
+		return true;
+
+	if (numpad_twins(pressedVk, wantVk))
 		return true;
 
 	if (wantVk >= kVK_ANSI_Keypad0 && wantVk <= kVK_ANSI_Keypad9) {
@@ -3942,9 +3997,31 @@ CGEventRef MotionCraftController::eventTapCallback(CGEventTapProxy proxy, CGEven
 #endif
 
 #ifdef __linux__
+/* See the Windows copy for why the pad and the main block have to be treated
+ * as the same key: Qt reports one Qt::Key for both. */
+static bool numpad_twins(int a, int b)
+{
+	static const struct {
+		int mainBlock;
+		int numPad;
+	} kTwins[] = {
+		{XK_period, XK_KP_Decimal}, {XK_plus, XK_KP_Add},          {XK_minus, XK_KP_Subtract},
+		{XK_slash, XK_KP_Divide},   {XK_asterisk, XK_KP_Multiply},
+	};
+
+	for (const auto &t : kTwins) {
+		if ((a == t.mainBlock && b == t.numPad) || (a == t.numPad && b == t.mainBlock))
+			return true;
+	}
+	return false;
+}
+
 static bool vk_matches(int pressedVk, int wantVk)
 {
 	if (pressedVk == wantVk)
+		return true;
+
+	if (numpad_twins(pressedVk, wantVk))
 		return true;
 
 	if (wantVk >= XK_a && wantVk <= XK_z)
@@ -4115,6 +4192,12 @@ static int qtKeyToVk(int qtKey)
 		return kVK_ANSI_Minus;
 	case Qt::Key_Period:
 		return kVK_ANSI_Period;
+	/* Only the pad types these unshifted, so there is no main-block key to map
+	 * them through; without this they returned 0 and could not be bound. */
+	case Qt::Key_Asterisk:
+		return kVK_ANSI_KeypadMultiply;
+	case Qt::Key_Plus:
+		return kVK_ANSI_KeypadPlus;
 	case Qt::Key_Slash:
 		return kVK_ANSI_Slash;
 	case Qt::Key_QuoteLeft:
@@ -4277,6 +4360,12 @@ static int qtKeyToVk(int qtKey)
 		return VK_OEM_MINUS;
 	case Qt::Key_Period:
 		return VK_OEM_PERIOD;
+	/* The pad's multiply is the only key that types an asterisk unshifted, so
+	 * it has no main-block twin to be mapped through. Without this it fell
+	 * through to the printable-ASCII fallback below and became 0x2A, which is
+	 * not a virtual key at all and could never match anything. */
+	case Qt::Key_Asterisk:
+		return VK_MULTIPLY;
 	case Qt::Key_Slash:
 		return VK_OEM_2;
 	case Qt::Key_QuoteLeft:
