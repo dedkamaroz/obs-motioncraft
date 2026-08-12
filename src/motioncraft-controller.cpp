@@ -1,4 +1,4 @@
-#include "zoominator-controller.hpp"
+#include "motioncraft-controller.hpp"
 
 #include <obs-frontend-api.h>
 #include <obs.h>
@@ -34,7 +34,7 @@
 #include <Carbon/Carbon.h>
 #endif
 
-#include "zoominator-dialog.hpp"
+#include "motioncraft-dialog.hpp"
 
 #ifdef __linux__
 #include <X11/Xlib.h>
@@ -62,8 +62,8 @@ static constexpr long X11_None = 0L;
 
 static int qtKeyToVk(int qtKey);
 
-static constexpr const char *kZoominatorMarkerSourceName = "Zoominator Cursor Marker";
-static constexpr const char *kZoominatorMarkerSourceId = "zoominator_marker_source";
+static constexpr const char *kMotionCraftMarkerSourceName = "MotionCraft Cursor Marker";
+static constexpr const char *kMotionCraftMarkerSourceId = "motioncraft_marker_source";
 static void cleanup_legacy_marker_items_all_scenes(obs_source_t *currentMarkerSource = nullptr);
 static bool source_name_starts_with(const char *name, const char *prefix);
 static void collect_live_scene_items(obs_scene_t *scene, std::vector<obs_sceneitem_t *> &items);
@@ -196,27 +196,27 @@ static bool scene_item_pointer_is_live(obs_scene_t *scene, obs_sceneitem_t *item
 	return std::find(liveItems.begin(), liveItems.end(), item) != liveItems.end();
 }
 
-ZoominatorController &ZoominatorController::instance()
+MotionCraftController &MotionCraftController::instance()
 {
-	static ZoominatorController inst;
+	static MotionCraftController inst;
 	return inst;
 }
 
-ZoominatorController::ZoominatorController()
+MotionCraftController::MotionCraftController()
 {
 	tickTimer.setInterval(16);
 	tickTimer.setTimerType(Qt::PreciseTimer);
-	connect(&tickTimer, &QTimer::timeout, this, &ZoominatorController::onTick);
+	connect(&tickTimer, &QTimer::timeout, this, &MotionCraftController::onTick);
 }
 
-ZoominatorController::~ZoominatorController()
+MotionCraftController::~MotionCraftController()
 {
 	markerSource = nullptr;
 }
 
-QString ZoominatorController::configPath() const
+QString MotionCraftController::configPath() const
 {
-	char *path = obs_module_config_path("zoominator.json");
+	char *path = obs_module_config_path("motioncraft.json");
 	if (!path)
 		return {};
 	QString p = QString::fromUtf8(path);
@@ -224,9 +224,24 @@ QString ZoominatorController::configPath() const
 	return p;
 }
 
-QString ZoominatorController::markerImagePath() const
+/* Where Zoominator kept its settings, derived from our own path so it tracks
+ * whatever profile directory OBS hands us. Read once, when no MotionCraft
+ * config exists yet, so an existing Zoominator setup survives the rename. */
+QString MotionCraftController::legacyConfigPath() const
 {
-	char *path = obs_module_config_path("zoominator-cursor-marker.png");
+	const QString p = configPath();
+	if (p.isEmpty())
+		return {};
+	const QString legacy = QStringLiteral("zoominator/zoominator.json");
+	const int cut = p.lastIndexOf(QStringLiteral("motioncraft/motioncraft.json"));
+	if (cut < 0)
+		return {};
+	return p.left(cut) + legacy;
+}
+
+QString MotionCraftController::markerImagePath() const
+{
+	char *path = obs_module_config_path("motioncraft-cursor-marker.png");
 	if (!path)
 		return {};
 	QString p = QString::fromUtf8(path);
@@ -234,7 +249,7 @@ QString ZoominatorController::markerImagePath() const
 	return p;
 }
 
-QString ZoominatorController::sceneItemKey(obs_sceneitem_t *item) const
+QString MotionCraftController::sceneItemKey(obs_sceneitem_t *item) const
 {
 	if (!item)
 		return {};
@@ -256,7 +271,7 @@ QString ZoominatorController::sceneItemKey(obs_sceneitem_t *item) const
 		.arg(itemId);
 }
 
-ZoominatorController::OrigState ZoominatorController::readSceneItemTransform(obs_sceneitem_t *item) const
+MotionCraftController::OrigState MotionCraftController::readSceneItemTransform(obs_sceneitem_t *item) const
 {
 	OrigState state{};
 	if (!item)
@@ -274,7 +289,7 @@ ZoominatorController::OrigState ZoominatorController::readSceneItemTransform(obs
 	return state;
 }
 
-void ZoominatorController::applySceneItemTransform(obs_sceneitem_t *item, const OrigState &state)
+void MotionCraftController::applySceneItemTransform(obs_sceneitem_t *item, const OrigState &state)
 {
 	if (!item || !state.valid)
 		return;
@@ -289,7 +304,7 @@ void ZoominatorController::applySceneItemTransform(obs_sceneitem_t *item, const 
 	obs_sceneitem_set_crop(item, &state.crop);
 }
 
-void ZoominatorController::loadRecoveryMap(obs_data_t *data)
+void MotionCraftController::loadRecoveryMap(obs_data_t *data)
 {
 	recoveryTransforms.clear();
 	if (!data)
@@ -332,7 +347,7 @@ void ZoominatorController::loadRecoveryMap(obs_data_t *data)
 	obs_data_array_release(arr);
 }
 
-void ZoominatorController::saveRecoveryMap(obs_data_t *data)
+void MotionCraftController::saveRecoveryMap(obs_data_t *data)
 {
 	if (!data)
 		return;
@@ -367,7 +382,7 @@ void ZoominatorController::saveRecoveryMap(obs_data_t *data)
 	obs_data_array_release(arr);
 }
 
-void ZoominatorController::scheduleSettingsSave(int delayMs)
+void MotionCraftController::scheduleSettingsSave(int delayMs)
 {
 	if (shuttingDown || pendingSettingsSave)
 		return;
@@ -380,7 +395,7 @@ void ZoominatorController::scheduleSettingsSave(int delayMs)
 	});
 }
 
-void ZoominatorController::restoreRecoveryIfNeeded()
+void MotionCraftController::restoreRecoveryIfNeeded()
 {
 	if (!recoveryActive)
 		return;
@@ -396,7 +411,7 @@ void ZoominatorController::restoreRecoveryIfNeeded()
 	obs_frontend_get_scenes(&scenes);
 
 	struct Ctx {
-		ZoominatorController *ctl = nullptr;
+		MotionCraftController *ctl = nullptr;
 		int restored = 0;
 		static void enumScene(obs_scene_t *scene, Ctx *ctx)
 		{
@@ -473,16 +488,16 @@ void ZoominatorController::restoreRecoveryIfNeeded()
 		clearRecoveryActive();
 }
 
-void ZoominatorController::requestRecoveryRestore()
+void MotionCraftController::requestRecoveryRestore()
 {
 	if (shuttingDown || !recoveryActive)
 		return;
 	restoreRecoveryIfNeeded();
 }
 
-void ZoominatorController::frontendEventCallback(enum obs_frontend_event event, void *data)
+void MotionCraftController::frontendEventCallback(enum obs_frontend_event event, void *data)
 {
-	auto *ctl = static_cast<ZoominatorController *>(data);
+	auto *ctl = static_cast<MotionCraftController *>(data);
 	if (!ctl || ctl->shuttingDown)
 		return;
 
@@ -493,7 +508,7 @@ void ZoominatorController::frontendEventCallback(enum obs_frontend_event event, 
 	}
 }
 
-void ZoominatorController::markRecoveryActive()
+void MotionCraftController::markRecoveryActive()
 {
 	if (recoveryActive)
 		return;
@@ -502,7 +517,7 @@ void ZoominatorController::markRecoveryActive()
 		saveSettings();
 }
 
-void ZoominatorController::clearRecoveryActive()
+void MotionCraftController::clearRecoveryActive()
 {
 	if (!recoveryActive)
 		return;
@@ -523,7 +538,7 @@ static void ensure_parent_dir_exists(const QString &filePath)
 	os_mkdirs(dirUtf8.constData());
 }
 
-void ZoominatorController::initialize()
+void MotionCraftController::initialize()
 {
 	loadSettings();
 	rebuildTriggersFromSettings();
@@ -535,7 +550,7 @@ void ZoominatorController::initialize()
 	QTimer::singleShot(5000, this, [this]() { cleanup_legacy_marker_items_all_scenes(markerSource); });
 }
 
-void ZoominatorController::shutdown()
+void MotionCraftController::shutdown()
 {
 	shuttingDown = true;
 	/* Must come first: obs_remove_tick_callback blocks until any in-flight tick
@@ -563,10 +578,10 @@ void ZoominatorController::shutdown()
 		dialog->close();
 }
 
-void ZoominatorController::showDialog()
+void MotionCraftController::showDialog()
 {
 	if (!dialog) {
-		dialog = new ZoominatorDialog(reinterpret_cast<QWidget *>(obs_frontend_get_main_window()));
+		dialog = new MotionCraftDialog(reinterpret_cast<QWidget *>(obs_frontend_get_main_window()));
 		dialog->setAttribute(Qt::WA_DeleteOnClose, true);
 		connect(dialog.data(), &QObject::destroyed, this, [this]() { dialog = nullptr; });
 	}
@@ -575,7 +590,7 @@ void ZoominatorController::showDialog()
 	dialog->activateWindow();
 }
 
-void ZoominatorController::loadSettings()
+void MotionCraftController::loadSettings()
 {
 	screenKey.clear();
 
@@ -615,8 +630,19 @@ void ZoominatorController::loadSettings()
 
 	QByteArray pUtf8 = p.toUtf8();
 	obs_data_t *data = obs_data_create_from_json_file_safe(pUtf8.constData(), "bak");
-	if (!data)
-		return;
+	if (!data) {
+		/* First run after the Zoominator rename: adopt the old config rather
+		 * than silently starting from defaults. It is only read - the next
+		 * save writes to the MotionCraft path and the old file is left alone. */
+		const QString legacy = legacyConfigPath();
+		if (legacy.isEmpty())
+			return;
+		QByteArray legacyUtf8 = legacy.toUtf8();
+		data = obs_data_create_from_json_file_safe(legacyUtf8.constData(), "bak");
+		if (!data)
+			return;
+		blog(LOG_INFO, "[MotionCraft] Adopted existing Zoominator settings from: %s", legacyUtf8.constData());
+	}
 
 	auto getStr = [&](const char *key) -> QString {
 		const char *v = obs_data_get_string(data, key);
@@ -734,7 +760,7 @@ void ZoominatorController::loadSettings()
 			const char *oldHk = obs_data_get_string(data, "hotkey");
 			lv.hotkey = oldHk ? QString::fromUtf8(oldHk) : QString();
 		}
-		blog(LOG_INFO, "[Zoominator] Migrated the single zoom trigger to zoom level 1.");
+		blog(LOG_INFO, "[MotionCraft] Migrated the single zoom trigger to zoom level 1.");
 	}
 
 	for (int i = 0; i < kZoomLevelCount; i++) {
@@ -798,18 +824,18 @@ void ZoominatorController::loadSettings()
 
 	obs_data_release(data);
 
-	logi(debug, "[Zoominator] Loaded settings from: %s", pUtf8.constData());
+	logi(debug, "[MotionCraft] Loaded settings from: %s", pUtf8.constData());
 
 	rebuildTriggersFromSettings();
 	emit settingsChanged();
 }
 
-void ZoominatorController::notifySettingsChanged()
+void MotionCraftController::notifySettingsChanged()
 {
 	emit settingsChanged();
 }
 
-void ZoominatorController::saveSettings()
+void MotionCraftController::saveSettings()
 {
 	const QString p = configPath();
 	if (p.isEmpty())
@@ -864,13 +890,13 @@ void ZoominatorController::saveSettings()
 	obs_data_save_json_safe(data, pUtf8.constData(), "tmp", "bak");
 	obs_data_release(data);
 
-	logi(debug, "[Zoominator] Saved settings to: %s", pUtf8.constData());
+	logi(debug, "[MotionCraft] Saved settings to: %s", pUtf8.constData());
 
 	rebuildTriggersFromSettings();
 	emit settingsChanged();
 }
 
-void ZoominatorController::rebuildRuntimeHooks()
+void MotionCraftController::rebuildRuntimeHooks()
 {
 	rebuildTriggersFromSettings();
 
@@ -884,7 +910,7 @@ void ZoominatorController::rebuildRuntimeHooks()
 	installHooks();
 }
 
-void ZoominatorController::ensureTicking(bool on)
+void MotionCraftController::ensureTicking(bool on)
 {
 	if (on) {
 		if (!tickTimer.isActive())
@@ -895,7 +921,7 @@ void ZoominatorController::ensureTicking(bool on)
 	}
 }
 
-double ZoominatorController::levelZoom(int level) const
+double MotionCraftController::levelZoom(int level) const
 {
 	if (level < 1 || level > kZoomLevelCount)
 		return 1.0;
@@ -909,7 +935,7 @@ double ZoominatorController::levelZoom(int level) const
  * starts - is interpolated from the pair bracketing it. Transition duration is
  * then just the distance between two coordinates, which gives |in(B) - in(A)|
  * for a plain A -> B zoom in and in(B) for a zoom in from rest. */
-double ZoominatorController::timelineMsForZoom(double z, bool zoomingIn) const
+double MotionCraftController::timelineMsForZoom(double z, bool zoomingIn) const
 {
 	struct Point {
 		double zoom;
@@ -943,7 +969,7 @@ double ZoominatorController::timelineMsForZoom(double z, bool zoomingIn) const
 
 /* Graphics thread only: seeds a transition from wherever the zoom currently is,
  * at whatever speed it currently has. */
-void ZoominatorController::beginSegment(int level)
+void MotionCraftController::beginSegment(int level)
 {
 	const double zTarget = levelZoom(level);
 	const double zNow = currentZoom;
@@ -968,7 +994,7 @@ void ZoominatorController::beginSegment(int level)
 	segmentRunning.store(true, std::memory_order_relaxed);
 }
 
-void ZoominatorController::activateLevel(int level)
+void MotionCraftController::activateLevel(int level)
 {
 	/* Gated here rather than in each platform's hook so no backend can drift.
 	 * requestLevel() is deliberately not gated: it is also the path that
@@ -986,11 +1012,11 @@ void ZoominatorController::activateLevel(int level)
 	/* A level configured at 1.0 is not a zoom, so treat its key as "go back to
 	 * unzoomed" rather than as a level you can sit at. */
 	const int pressed = (levelZoom(level) > 1.0) ? level : 0;
-	logi(debug, "[Zoominator] Level key %d pressed while at level %d", level, requestedLevel);
+	logi(debug, "[MotionCraft] Level key %d pressed while at level %d", level, requestedLevel);
 	requestLevel((requestedLevel == pressed) ? 0 : pressed);
 }
 
-void ZoominatorController::requestLevel(int next)
+void MotionCraftController::requestLevel(int next)
 {
 	/* A level requested inside the teardown gap would otherwise re-capture the
 	 * still-normalized transforms as if they were the originals, permanently
@@ -1001,7 +1027,7 @@ void ZoominatorController::requestLevel(int next)
 	const int previous = requestedLevel;
 	requestedLevel = next;
 
-	logi(debug, "[Zoominator] Zoom level %d -> %d", previous, next);
+	logi(debug, "[MotionCraft] Zoom level %d -> %d", previous, next);
 
 	if (previous == 0 && next == 0)
 		return;
@@ -1040,7 +1066,7 @@ void ZoominatorController::requestLevel(int next)
 	}
 }
 
-void ZoominatorController::resetState()
+void MotionCraftController::resetState()
 {
 	zoomActive.store(false, std::memory_order_release);
 	tickingWanted.store(false, std::memory_order_release);
@@ -1088,7 +1114,7 @@ static QString make_screen_key_from_rect(int x, int y, int w, int h)
 	return QStringLiteral("%1,%2,%3,%4").arg(x).arg(y).arg(w).arg(h);
 }
 
-void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const
+void MotionCraftController::enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const
 {
 	items.clear();
 
@@ -1112,13 +1138,13 @@ void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sc
 			obs_source_t *src = obs_sceneitem_get_source(item);
 			if (!src)
 				return true;
-			if (src == ZoominatorController::instance().markerSource)
+			if (src == MotionCraftController::instance().markerSource)
 				return true;
 			const char *srcName = obs_source_get_name(src);
 			const char *srcId = obs_source_get_id(src);
-			if (srcId && QString::fromUtf8(srcId) == QString::fromUtf8(kZoominatorMarkerSourceId))
+			if (srcId && QString::fromUtf8(srcId) == QString::fromUtf8(kMotionCraftMarkerSourceId))
 				return true;
-			return source_name_starts_with(srcName, kZoominatorMarkerSourceName);
+			return source_name_starts_with(srcName, kMotionCraftMarkerSourceName);
 		}
 
 		static void enum_scene(obs_scene_t *scene, Ctx *ctx)
@@ -1161,7 +1187,7 @@ void ZoominatorController::enumerateTargetItemsInCurrentScene(std::vector<obs_sc
 	Ctx::enum_scene(scene, &ctx);
 }
 
-bool ZoominatorController::getSelectedScreenRect(int &x, int &y, int &w, int &h) const
+bool MotionCraftController::getSelectedScreenRect(int &x, int &y, int &w, int &h) const
 {
 	const auto screens = QGuiApplication::screens();
 	for (auto *screen : screens) {
@@ -1180,7 +1206,7 @@ bool ZoominatorController::getSelectedScreenRect(int &x, int &y, int &w, int &h)
 	return false;
 }
 
-bool ZoominatorController::getCursorPos(int &x, int &y) const
+bool MotionCraftController::getCursorPos(int &x, int &y) const
 {
 #if defined(__linux__)
 	const QString platform = QGuiApplication::platformName();
@@ -1952,7 +1978,7 @@ static bool match_window_rect_for_source(obs_source_t *src, LinuxRect &rcOut)
 }
 #endif
 
-bool ZoominatorController::mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy,
+bool MotionCraftController::mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy,
 						  bool &cursorInside) const
 {
 	cursorInside = false;
@@ -2009,10 +2035,10 @@ static void remove_legacy_marker_items(obs_scene_t *scene, obs_source_t *current
 
 			const char *name = obs_source_get_name(src);
 			const char *id = obs_source_get_id(src);
-			const bool markerName = source_name_starts_with(name, kZoominatorMarkerSourceName);
+			const bool markerName = source_name_starts_with(name, kMotionCraftMarkerSourceName);
 			const bool oldImageSource = id && QString::fromUtf8(id) == QStringLiteral("image_source");
 			const bool oldProceduralMarker =
-				id && QString::fromUtf8(id) == QString::fromUtf8(kZoominatorMarkerSourceId) &&
+				id && QString::fromUtf8(id) == QString::fromUtf8(kMotionCraftMarkerSourceId) &&
 				src != ctx->current;
 			if (markerName && (oldImageSource || oldProceduralMarker))
 				ctx->items.push_back(item);
@@ -2066,7 +2092,7 @@ static void normalize_marker_scene_item(obs_sceneitem_t *item)
 	obs_sceneitem_set_order(item, OBS_ORDER_MOVE_TOP);
 }
 
-void ZoominatorController::rebuildMarkerImage()
+void MotionCraftController::rebuildMarkerImage()
 {
 	const int size = std::clamp(markerSize, 6, 512);
 	const QString path = markerImagePath();
@@ -2103,13 +2129,13 @@ void ZoominatorController::rebuildMarkerImage()
 	img.save(path, "PNG");
 }
 
-void ZoominatorController::ensureMarkerFilter()
+void MotionCraftController::ensureMarkerFilter()
 {
 	if (!markerSource)
 		return;
 
 	if (markerFilter) {
-		obs_source_t *existing = obs_source_get_filter_by_name(markerSource, "ZoominatorOpacity");
+		obs_source_t *existing = obs_source_get_filter_by_name(markerSource, "MotionCraftOpacity");
 		if (existing) {
 			obs_source_release(existing);
 			return;
@@ -2120,14 +2146,14 @@ void ZoominatorController::ensureMarkerFilter()
 
 	obs_data_t *fsettings = obs_data_create();
 	obs_data_set_double(fsettings, "opacity", 100.0);
-	markerFilter = obs_source_create_private("color_filter", "ZoominatorOpacity", fsettings);
+	markerFilter = obs_source_create_private("color_filter", "MotionCraftOpacity", fsettings);
 	obs_data_release(fsettings);
 
 	if (markerFilter)
 		obs_source_filter_add(markerSource, markerFilter);
 }
 
-void ZoominatorController::applyMarkerOpacity(int opacity255)
+void MotionCraftController::applyMarkerOpacity(int opacity255)
 {
 	ensureMarkerFilter();
 	if (!markerFilter)
@@ -2145,7 +2171,7 @@ void ZoominatorController::applyMarkerOpacity(int opacity255)
 	obs_data_release(fsettings);
 }
 
-void ZoominatorController::ensureMarkerSource()
+void MotionCraftController::ensureMarkerSource()
 {
 	if (markerSource)
 		return;
@@ -2159,14 +2185,14 @@ void ZoominatorController::ensureMarkerSource()
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "file", path.toUtf8().constData());
 	obs_data_set_bool(settings, "unload", false);
-	markerSource = obs_source_create_private("image_source", kZoominatorMarkerSourceName, settings);
+	markerSource = obs_source_create_private("image_source", kMotionCraftMarkerSourceName, settings);
 	obs_data_release(settings);
 
 	if (markerSource)
 		ensureMarkerFilter();
 }
 
-obs_sceneitem_t *ZoominatorController::ensureMarkerItem(obs_scene_t *scene)
+obs_sceneitem_t *MotionCraftController::ensureMarkerItem(obs_scene_t *scene)
 {
 	if (!scene)
 		return nullptr;
@@ -2210,7 +2236,7 @@ obs_sceneitem_t *ZoominatorController::ensureMarkerItem(obs_scene_t *scene)
 	return item;
 }
 
-void ZoominatorController::hideMarkerInScene(obs_scene_t *scene)
+void MotionCraftController::hideMarkerInScene(obs_scene_t *scene)
 {
 	if (!scene || !markerSource)
 		return;
@@ -2241,7 +2267,7 @@ void ZoominatorController::hideMarkerInScene(obs_scene_t *scene)
 		obs_sceneitem_set_visible(finder.found, false);
 }
 
-void ZoominatorController::updateMarkerAppearance()
+void MotionCraftController::updateMarkerAppearance()
 {
 	const uint32_t appearanceHash = ((uint32_t)std::clamp(markerSize, 6, 512) << 24) ^
 					((uint32_t)std::clamp(markerThickness, 1, 64) << 16) ^ markerColor;
@@ -2264,7 +2290,7 @@ void ZoominatorController::updateMarkerAppearance()
 	markerCurrentOpacity = -1;
 }
 
-bool ZoominatorController::captureMarkerClickPosition()
+bool MotionCraftController::captureMarkerClickPosition()
 {
 	if (!showCursorMarker || !markerOnlyOnClick)
 		return false;
@@ -2290,13 +2316,13 @@ bool ZoominatorController::captureMarkerClickPosition()
 	return true;
 }
 
-bool ZoominatorController::isMarkerFlashActive(qint64 nowMs) const
+bool MotionCraftController::isMarkerFlashActive(qint64 nowMs) const
 {
 	return showCursorMarker && markerOnlyOnClick && markerClickHasPos && markerClickFlashFadeOutEndMs > 0 &&
 	       nowMs < markerClickFlashFadeOutEndMs;
 }
 
-int ZoominatorController::currentMarkerOpacity(qint64 nowMs)
+int MotionCraftController::currentMarkerOpacity(qint64 nowMs)
 {
 	if (!showCursorMarker || !markerOnlyOnClick || !markerClickHasPos)
 		return 0;
@@ -2325,7 +2351,7 @@ int ZoominatorController::currentMarkerOpacity(qint64 nowMs)
 	return (int)std::round((1.0 - smoothstep(tOut)) * 255.0);
 }
 
-void ZoominatorController::updateMarkerPosition(obs_scene_t *scene, double x, double y, int opacity255)
+void MotionCraftController::updateMarkerPosition(obs_scene_t *scene, double x, double y, int opacity255)
 {
 	if (!showCursorMarker)
 		return;
@@ -2359,7 +2385,7 @@ void ZoominatorController::updateMarkerPosition(obs_scene_t *scene, double x, do
 	}
 }
 
-void ZoominatorController::captureOriginal(obs_sceneitem_t *item)
+void MotionCraftController::captureOriginal(obs_sceneitem_t *item)
 {
 	if (!item)
 		return;
@@ -2440,7 +2466,7 @@ void ZoominatorController::captureOriginal(obs_sceneitem_t *item)
 	sceneItems.push_back(state);
 }
 
-void ZoominatorController::captureOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
+void MotionCraftController::captureOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
 {
 	sceneItems.clear();
 	sceneContentBoundsValid = false;
@@ -2516,7 +2542,7 @@ void ZoominatorController::captureOriginalSceneItems(const std::vector<obs_scene
 	}
 }
 
-void ZoominatorController::restoreOriginal(obs_sceneitem_t *item)
+void MotionCraftController::restoreOriginal(obs_sceneitem_t *item)
 {
 	if (!item)
 		return;
@@ -2528,13 +2554,13 @@ void ZoominatorController::restoreOriginal(obs_sceneitem_t *item)
 	}
 }
 
-void ZoominatorController::restoreOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
+void MotionCraftController::restoreOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
 {
 	for (auto *item : items)
 		restoreOriginal(item);
 }
 
-void ZoominatorController::restoreOriginalSceneItemsFromState()
+void MotionCraftController::restoreOriginalSceneItemsFromState()
 {
 	for (const auto &state : sceneItems) {
 		if (state.item && state.orig.valid)
@@ -2542,7 +2568,7 @@ void ZoominatorController::restoreOriginalSceneItemsFromState()
 	}
 }
 
-void ZoominatorController::applyZoomToScene(double z)
+void MotionCraftController::applyZoomToScene(double z)
 {
 	if (sceneItems.empty())
 		return;
@@ -2835,7 +2861,7 @@ void ZoominatorController::applyZoomToScene(double z)
 
 /* Main-thread half of the loop. Samples everything the graphics thread is not
  * allowed to touch and publishes it. Deliberately does no animation work. */
-void ZoominatorController::onTick()
+void MotionCraftController::onTick()
 {
 	if (pendingFinish.exchange(false)) {
 		finishZoomOnMainThread();
@@ -2850,7 +2876,7 @@ void ZoominatorController::onTick()
 		enumerateTargetItemsInCurrentScene(items);
 		if (items.empty()) {
 			if (debug)
-				blog(LOG_WARNING, "[Zoominator] No movable scene items in current scene.");
+				blog(LOG_WARNING, "[MotionCraft] No movable scene items in current scene.");
 			tickingWanted.store(false, std::memory_order_release);
 			ensureTicking(false);
 			resetState();
@@ -2916,14 +2942,14 @@ void ZoominatorController::onTick()
 
 /* Graphics-thread half. Called once per rendered frame with the real frame
  * delta, so motion is correct at any output frame rate. */
-void ZoominatorController::videoTickCallback(void *param, float seconds)
+void MotionCraftController::videoTickCallback(void *param, float seconds)
 {
-	auto *self = static_cast<ZoominatorController *>(param);
+	auto *self = static_cast<MotionCraftController *>(param);
 	if (self)
 		self->videoTick((double)seconds);
 }
 
-void ZoominatorController::videoTick(double seconds)
+void MotionCraftController::videoTick(double seconds)
 {
 	if (!zoomActive.load(std::memory_order_acquire) || shuttingDown)
 		return;
@@ -2968,7 +2994,7 @@ void ZoominatorController::videoTick(double seconds)
 	applyZoomToScene(currentZoom);
 }
 
-void ZoominatorController::finishZoomOnMainThread()
+void MotionCraftController::finishZoomOnMainThread()
 {
 	restoringRecovery = true;
 	restoreOriginalSceneItemsFromState();
@@ -2989,7 +3015,7 @@ void ZoominatorController::finishZoomOnMainThread()
 		obs_source_release(staleRef);
 }
 
-static ZoominatorController *g_ctl = nullptr;
+static MotionCraftController *g_ctl = nullptr;
 
 struct ModifierState {
 	bool leftCtrl = false;
@@ -3113,7 +3139,7 @@ static bool vk_matches(int pressedVk, int wantVk)
 	return false;
 }
 
-LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK MotionCraftController::kb_hook_proc(int nCode, WPARAM wParam, LPARAM lParam)
 {
 	if (nCode == HC_ACTION && g_ctl) {
 		const auto *k = reinterpret_cast<KBDLLHOOKSTRUCT *>(lParam);
@@ -3133,7 +3159,7 @@ LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LP
 		}
 
 		if (down) {
-			for (int i = 0; i < ZoominatorController::kZoomLevelCount; i++) {
+			for (int i = 0; i < MotionCraftController::kZoomLevelCount; i++) {
 				const auto &lv = g_ctl->zoomLevels[i];
 				if (!lv.valid || lv.vk == 0 || !vk_matches(vk, lv.vk))
 					continue;
@@ -3147,7 +3173,7 @@ LRESULT CALLBACK ZoominatorController::kb_hook_proc(int nCode, WPARAM wParam, LP
 	return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
 }
 
-LRESULT CALLBACK ZoominatorController::mouse_hook_proc(int nCode, WPARAM wParam, LPARAM lParam)
+LRESULT CALLBACK MotionCraftController::mouse_hook_proc(int nCode, WPARAM wParam, LPARAM lParam)
 {
 	if (nCode == HC_ACTION && g_ctl) {
 		const auto *m = reinterpret_cast<MSLLHOOKSTRUCT *>(lParam);
@@ -3178,11 +3204,11 @@ static bool vk_matches(int pressedVk, int wantVk)
 	return false;
 }
 
-CGEventRef ZoominatorController::eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event,
+CGEventRef MotionCraftController::eventTapCallback(CGEventTapProxy proxy, CGEventType type, CGEventRef event,
 						  void *refcon)
 {
 	(void)proxy;
-	auto *ctl = static_cast<ZoominatorController *>(refcon);
+	auto *ctl = static_cast<MotionCraftController *>(refcon);
 	if (!ctl)
 		return event;
 
@@ -3206,7 +3232,7 @@ CGEventRef ZoominatorController::eventTapCallback(CGEventTapProxy proxy, CGEvent
 		}
 
 		if (down) {
-			for (int i = 0; i < ZoominatorController::kZoomLevelCount; i++) {
+			for (int i = 0; i < MotionCraftController::kZoomLevelCount; i++) {
 				const auto &lv = ctl->zoomLevels[i];
 				if (!lv.valid || lv.vk == 0 || !vk_matches(keycode, lv.vk))
 					continue;
@@ -3247,7 +3273,7 @@ static bool vk_matches(int pressedVk, int wantVk)
 	return false;
 }
 
-void ZoominatorController::processXInput2Events()
+void MotionCraftController::processXInput2Events()
 {
 	if (!xiDisplay)
 		return;
@@ -3302,7 +3328,7 @@ void ZoominatorController::processXInput2Events()
 }
 #endif
 
-void ZoominatorController::toggleFollowMouseRuntime()
+void MotionCraftController::toggleFollowMouseRuntime()
 {
 	/* Only ever reached from a hotkey, so it obeys the same focus policy. */
 	if (!hotkeysEnabled || !hotkeyFocusAllows())
@@ -3319,7 +3345,7 @@ void ZoominatorController::toggleFollowMouseRuntime()
 	followHasPos = false;
 
 	if (debug) {
-		blog(LOG_INFO, "[Zoominator] Follow mouse %s", followMouseRuntimeEnabled ? "ENABLED" : "DISABLED");
+		blog(LOG_INFO, "[MotionCraft] Follow mouse %s", followMouseRuntimeEnabled ? "ENABLED" : "DISABLED");
 	}
 }
 
@@ -3582,7 +3608,7 @@ static int qtKeyToVk(int qtKey)
 /* Level keys accept an optional modifier combination but must carry a real key:
  * a bare Shift or Ctrl is far too easy to fire by accident when five of them
  * are bound at once, so it is rejected rather than treated as a trigger. */
-static void parse_level_hotkey(ZoominatorController::ZoomLevel &lv)
+static void parse_level_hotkey(MotionCraftController::ZoomLevel &lv)
 {
 	lv.vk = 0;
 	lv.valid = false;
@@ -3617,7 +3643,7 @@ static void parse_level_hotkey(ZoominatorController::ZoomLevel &lv)
 	lv.valid = (lv.vk != 0);
 }
 
-void ZoominatorController::rebuildTriggersFromSettings()
+void MotionCraftController::rebuildTriggersFromSettings()
 {
 	for (ZoomLevel &lv : zoomLevels)
 		parse_level_hotkey(lv);
@@ -3714,7 +3740,7 @@ void ZoominatorController::rebuildTriggersFromSettings()
  * Read fresh rather than cached so a change in OBS's settings applies at once.
  * Called only once a hotkey has already matched, so ordinary typing never
  * reaches it. */
-bool ZoominatorController::hotkeyFocusAllows() const
+bool MotionCraftController::hotkeyFocusAllows() const
 {
 	config_t *cfg = obs_frontend_get_user_config();
 	if (!cfg)
@@ -3737,7 +3763,7 @@ bool ZoominatorController::hotkeyFocusAllows() const
 	return inFocus ? enableInFocus : enableOutOfFocus;
 }
 
-bool ZoominatorController::anyLevelHotkeyValid() const
+bool MotionCraftController::anyLevelHotkeyValid() const
 {
 	for (const ZoomLevel &lv : zoomLevels) {
 		if (lv.valid)
@@ -3746,19 +3772,19 @@ bool ZoominatorController::anyLevelHotkeyValid() const
 	return false;
 }
 
-bool ZoominatorController::needsKeyboardHook() const
+bool MotionCraftController::needsKeyboardHook() const
 {
 	return hotkeysEnabled && (anyLevelHotkeyValid() || followToggleHkValid);
 }
 
-bool ZoominatorController::needsMouseHook() const
+bool MotionCraftController::needsMouseHook() const
 {
 	/* The mouse hook only exists for the cursor halo now that no trigger can
 	 * be bound to a mouse button. */
 	return showCursorMarker;
 }
 
-void ZoominatorController::installHooks()
+void MotionCraftController::installHooks()
 {
 	if (!needsKeyboardHook() && !needsMouseHook())
 		return;
@@ -3794,7 +3820,7 @@ void ZoominatorController::installHooks()
 			CGEventTapEnable(eventTap, true);
 		} else {
 			blog(LOG_WARNING,
-			     "[Zoominator] Failed to create CGEventTap. "
+			     "[MotionCraft] Failed to create CGEventTap. "
 			     "Grant Accessibility permission to OBS in System Settings > Privacy & Security > Accessibility.");
 		}
 	}
@@ -3804,7 +3830,7 @@ void ZoominatorController::installHooks()
 	const QString platform = QGuiApplication::platformName();
 	if (platform.startsWith(QStringLiteral("wayland"), Qt::CaseInsensitive)) {
 		blog(LOG_WARNING,
-		     "[Zoominator] Native Wayland session detected. XInput2 hooks and global cursor tracking are disabled. "
+		     "[MotionCraft] Native Wayland session detected. XInput2 hooks and global cursor tracking are disabled. "
 		     "The Global Shortcuts portal can provide hotkeys, but Wayland has no passive global cursor-position "
 		     "portal; full tracking requires a compositor-supported input-capture workflow.");
 		return;
@@ -3813,13 +3839,13 @@ void ZoominatorController::installHooks()
 	if (!xiDisplay) {
 		xiDisplay = XOpenDisplay(nullptr);
 		if (!xiDisplay) {
-			blog(LOG_WARNING, "[Zoominator] Failed to open X11 display for input hooks.");
+			blog(LOG_WARNING, "[MotionCraft] Failed to open X11 display for input hooks.");
 			return;
 		}
 
 		int event, error;
 		if (!XQueryExtension(xiDisplay, "XInputExtension", &xiOpcode, &event, &error)) {
-			blog(LOG_WARNING, "[Zoominator] XInput2 extension not available.");
+			blog(LOG_WARNING, "[MotionCraft] XInput2 extension not available.");
 			XCloseDisplay(xiDisplay);
 			xiDisplay = nullptr;
 			return;
@@ -3827,7 +3853,7 @@ void ZoominatorController::installHooks()
 
 		int major = 2, minor = 0;
 		if (XIQueryVersion(xiDisplay, &major, &minor) != Success) {
-			blog(LOG_WARNING, "[Zoominator] XInput2 version query failed.");
+			blog(LOG_WARNING, "[MotionCraft] XInput2 version query failed.");
 			XCloseDisplay(xiDisplay);
 			xiDisplay = nullptr;
 			return;
@@ -3851,14 +3877,14 @@ void ZoominatorController::installHooks()
 
 		int fd = ConnectionNumber(xiDisplay);
 		xiNotifier = new QSocketNotifier(fd, QSocketNotifier::Read, this);
-		connect(xiNotifier, &QSocketNotifier::activated, this, &ZoominatorController::processXInput2Events);
+		connect(xiNotifier, &QSocketNotifier::activated, this, &MotionCraftController::processXInput2Events);
 
-		blog(LOG_INFO, "[Zoominator] XInput2 global input hooks installed (XI %d.%d).", major, minor);
+		blog(LOG_INFO, "[MotionCraft] XInput2 global input hooks installed (XI %d.%d).", major, minor);
 	}
 #endif
 }
 
-void ZoominatorController::uninstallHooks()
+void MotionCraftController::uninstallHooks()
 {
 #ifdef _WIN32
 	if (keyboardHook) {

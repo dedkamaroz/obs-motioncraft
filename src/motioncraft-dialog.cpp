@@ -1,5 +1,5 @@
-#include "zoominator-dialog.hpp"
-#include "zoominator-controller.hpp"
+#include "motioncraft-dialog.hpp"
+#include "motioncraft-controller.hpp"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -73,7 +73,7 @@ static void addSection(QVBoxLayout *lay, const QString &title, bool firstSection
 
 static void frontend_event_cb(enum obs_frontend_event, void *data)
 {
-	auto *dlg = static_cast<ZoominatorDialog *>(data);
+	auto *dlg = static_cast<MotionCraftDialog *>(data);
 	if (!dlg)
 		return;
 	QMetaObject::invokeMethod(dlg, "refreshLists", Qt::QueuedConnection);
@@ -131,9 +131,9 @@ static QString friendlySourceKind(const QString &kind)
 
 } // namespace
 
-ZoominatorDialog::ZoominatorDialog(QWidget *parent) : QDialog(parent)
+MotionCraftDialog::MotionCraftDialog(QWidget *parent) : QDialog(parent)
 {
-	setWindowTitle(T("Zoominator"));
+	setWindowTitle(T("MotionCraft"));
 	setModal(false);
 	resize(620, 560);
 
@@ -142,35 +142,35 @@ ZoominatorDialog::ZoominatorDialog(QWidget *parent) : QDialog(parent)
 	obs_frontend_add_event_callback(frontend_event_cb, this);
 
 	auto *sh = obs_get_signal_handler();
-	signal_handler_connect(sh, "source_create", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_connect(sh, "source_destroy", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_connect(sh, "source_rename", &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_connect(sh, "source_create", &MotionCraftDialog::obsSourceChanged, this);
+	signal_handler_connect(sh, "source_destroy", &MotionCraftDialog::obsSourceChanged, this);
+	signal_handler_connect(sh, "source_rename", &MotionCraftDialog::obsSourceChanged, this);
 
 	refreshLists();
 	loadFromController();
 }
 
-void ZoominatorDialog::closeEvent(QCloseEvent *event)
+void MotionCraftDialog::closeEvent(QCloseEvent *event)
 {
 	obs_frontend_remove_event_callback(frontend_event_cb, this);
 
 	auto *sh = obs_get_signal_handler();
-	signal_handler_disconnect(sh, "source_create", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_disconnect(sh, "source_destroy", &ZoominatorDialog::obsSourceChanged, this);
-	signal_handler_disconnect(sh, "source_rename", &ZoominatorDialog::obsSourceChanged, this);
+	signal_handler_disconnect(sh, "source_create", &MotionCraftDialog::obsSourceChanged, this);
+	signal_handler_disconnect(sh, "source_destroy", &MotionCraftDialog::obsSourceChanged, this);
+	signal_handler_disconnect(sh, "source_rename", &MotionCraftDialog::obsSourceChanged, this);
 
 	applyToController();
 	QDialog::closeEvent(event);
 }
 
-void ZoominatorDialog::obsSourceChanged(void *data, struct calldata *)
+void MotionCraftDialog::obsSourceChanged(void *data, struct calldata *)
 {
-	auto *dlg = static_cast<ZoominatorDialog *>(data);
+	auto *dlg = static_cast<MotionCraftDialog *>(data);
 	if (dlg)
 		QMetaObject::invokeMethod(dlg, "populateSourcesTab", Qt::QueuedConnection);
 }
 
-void ZoominatorDialog::buildUi()
+void MotionCraftDialog::buildUi()
 {
 	auto *root = new QVBoxLayout(this);
 	root->setContentsMargins(12, 12, 12, 12);
@@ -333,14 +333,14 @@ void ZoominatorDialog::buildUi()
 	btnRow->addWidget(btnApply);
 	root->addLayout(btnRow);
 
-	connect(btnRefresh, &QPushButton::clicked, this, &ZoominatorDialog::refreshLists);
-	connect(btnApply, &QPushButton::clicked, this, &ZoominatorDialog::applyToController);
-	connect(btnTest, &QPushButton::clicked, this, &ZoominatorDialog::testZoom);
-	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &ZoominatorDialog::clearFollowToggleHotkey);
-	connect(btnMarkerColor, &QPushButton::clicked, this, &ZoominatorDialog::chooseMarkerColor);
+	connect(btnRefresh, &QPushButton::clicked, this, &MotionCraftDialog::refreshLists);
+	connect(btnApply, &QPushButton::clicked, this, &MotionCraftDialog::applyToController);
+	connect(btnTest, &QPushButton::clicked, this, &MotionCraftDialog::testZoom);
+	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &MotionCraftDialog::clearFollowToggleHotkey);
+	connect(btnMarkerColor, &QPushButton::clicked, this, &MotionCraftDialog::chooseMarkerColor);
 }
 
-void ZoominatorDialog::buildZoomLevelsTab()
+void MotionCraftDialog::buildZoomLevelsTab()
 {
 	auto *page = new QWidget;
 	auto *lay = new QVBoxLayout(page);
@@ -366,7 +366,7 @@ void ZoominatorDialog::buildZoomLevelsTab()
 		grid->addWidget(lbl, 0, col);
 	}
 
-	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+	for (int i = 0; i < MotionCraftController::kZoomLevelCount; ++i) {
 		LevelRow &row = levelRows[i];
 		const int r = i + 1;
 
@@ -415,12 +415,12 @@ void ZoominatorDialog::buildZoomLevelsTab()
 	tabWidget->addTab(page, T("Dialog.Tab.ZoomLevels"));
 }
 
-void ZoominatorDialog::populateSourcesTab()
+void MotionCraftDialog::populateSourcesTab()
 {
 	if (!lstSources)
 		return;
 
-	auto &c = ZoominatorController::instance();
+	auto &c = MotionCraftController::instance();
 
 	QSet<QString> included;
 	if (lstSources->count() > 0) {
@@ -457,7 +457,11 @@ void ZoominatorDialog::populateSourcesTab()
 					if (!name || !*name)
 						return true;
 
-					if (strcmp(name, "Zoominator Cursor Marker") == 0)
+					/* Our own marker, plus any orphan left in a scene by a
+					 * pre-rename Zoominator install. Neither is a source
+					 * the user can meaningfully pick. */
+					if (strcmp(name, "MotionCraft Cursor Marker") == 0 ||
+					    strcmp(name, "Zoominator Cursor Marker") == 0)
 						return true;
 
 					const QString qname = QString::fromUtf8(name);
@@ -502,7 +506,7 @@ void ZoominatorDialog::populateSourcesTab()
 	}
 }
 
-void ZoominatorDialog::populateSources()
+void MotionCraftDialog::populateSources()
 {
 	const QString cur = cmbSource->currentData().toString();
 
@@ -528,23 +532,23 @@ void ZoominatorDialog::populateSources()
 
 	int idx = cmbSource->findData(cur);
 	if (idx < 0)
-		idx = cmbSource->findData(ZoominatorController::instance().screenKey);
+		idx = cmbSource->findData(MotionCraftController::instance().screenKey);
 	if (idx >= 0)
 		cmbSource->setCurrentIndex(idx);
 
 	cmbSource->blockSignals(false);
 }
 
-void ZoominatorDialog::refreshLists()
+void MotionCraftDialog::refreshLists()
 {
 	populateSources();
 	populateSourcesTab();
 }
 
-void ZoominatorDialog::loadFromController()
+void MotionCraftDialog::loadFromController()
 {
 	loading = true;
-	auto &c = ZoominatorController::instance();
+	auto &c = MotionCraftController::instance();
 
 	refreshLists();
 
@@ -558,7 +562,7 @@ void ZoominatorDialog::loadFromController()
 
 	chkHotkeysEnabled->setChecked(c.hotkeysEnabled);
 
-	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+	for (int i = 0; i < MotionCraftController::kZoomLevelCount; ++i) {
 		const auto &lv = c.zoomLevels[i];
 		levelRows[i].zoom->setValue(lv.zoom);
 		levelRows[i].in->setValue(lv.inMs);
@@ -586,19 +590,19 @@ void ZoominatorDialog::loadFromController()
 	loading = false;
 }
 
-void ZoominatorDialog::applyToController()
+void MotionCraftDialog::applyToController()
 {
 	if (loading)
 		return;
 
-	auto &c = ZoominatorController::instance();
+	auto &c = MotionCraftController::instance();
 
 	c.screenKey = cmbSource->currentData().toString();
 	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
 
 	c.hotkeysEnabled = chkHotkeysEnabled->isChecked();
 
-	for (int i = 0; i < ZoominatorController::kZoomLevelCount; ++i) {
+	for (int i = 0; i < MotionCraftController::kZoomLevelCount; ++i) {
 		auto &lv = c.zoomLevels[i];
 		lv.zoom = levelRows[i].zoom->value();
 		lv.inMs = levelRows[i].in->value();
@@ -637,18 +641,18 @@ void ZoominatorDialog::applyToController()
 	lblStatus->setText(T("Dialog.SettingsApplied"));
 }
 
-void ZoominatorDialog::testZoom()
+void MotionCraftDialog::testZoom()
 {
 	applyToController();
 	lblStatus->setText(T("Dialog.TestStatus"));
 }
 
-void ZoominatorDialog::clearFollowToggleHotkey()
+void MotionCraftDialog::clearFollowToggleHotkey()
 {
 	editFollowToggleHotkey->setKeySequence(QKeySequence());
 }
 
-void ZoominatorDialog::updateMarkerColorButton(const QColor &color)
+void MotionCraftDialog::updateMarkerColorButton(const QColor &color)
 {
 	if (!btnMarkerColor)
 		return;
@@ -661,7 +665,7 @@ void ZoominatorDialog::updateMarkerColorButton(const QColor &color)
 					      .arg(c.lightness() < 128 ? "#ffffff" : "#000000"));
 }
 
-void ZoominatorDialog::chooseMarkerColor()
+void MotionCraftDialog::chooseMarkerColor()
 {
 	const uint rgba = btnMarkerColor ? btnMarkerColor->property("markerRgba").toUInt() : QColor(255, 0, 0).rgba();
 	const QColor picked = QColorDialog::getColor(QColor::fromRgba(rgba), this, T("Dialog.PickCursorHaloColor"),

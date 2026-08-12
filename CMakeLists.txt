@@ -55,10 +55,10 @@ endif()
 
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
   src/plugin-main.cpp
-  src/zoominator-controller.cpp
-  src/zoominator-controller.hpp
-  src/zoominator-dialog.cpp
-  src/zoominator-dialog.hpp
+  src/motioncraft-controller.cpp
+  src/motioncraft-controller.hpp
+  src/motioncraft-dialog.cpp
+  src/motioncraft-dialog.hpp
 )
 
 set_target_properties_plugin(${CMAKE_PROJECT_NAME} PROPERTIES OUTPUT_NAME ${_name})

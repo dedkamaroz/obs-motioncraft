@@ -14,11 +14,11 @@ class QSpinBox;
 class QTabWidget;
 struct calldata;
 
-class ZoominatorDialog final : public QDialog {
+class MotionCraftDialog final : public QDialog {
 	Q_OBJECT
 
 public:
-	explicit ZoominatorDialog(QWidget *parent = nullptr);
+	explicit MotionCraftDialog(QWidget *parent = nullptr);
 
 protected:
 	void closeEvent(QCloseEvent *event) override;

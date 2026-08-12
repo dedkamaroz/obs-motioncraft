@@ -33,11 +33,11 @@
   },
   "platformConfig": {
     "macos": {
-      "bundleId": "com.streamrsc.zoominator"
+      "bundleId": "com.dedkamaroz.motioncraft"
     }
   },
-  "name": "zoominator",
-  "displayName": "Zoominator",
+  "name": "motioncraft",
+  "displayName": "MotionCraft",
   "version": "2.0.1",
   "author": "MMLTECH",
   "website": "https://streamrsc.com",

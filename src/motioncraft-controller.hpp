@@ -28,13 +28,13 @@
 struct _XDisplay;
 #endif
 
-class ZoominatorDialog;
+class MotionCraftDialog;
 
-class ZoominatorController final : public QObject {
+class MotionCraftController final : public QObject {
 	Q_OBJECT
 
 public:
-	static ZoominatorController &instance();
+	static MotionCraftController &instance();
 
 	void initialize();
 	void shutdown();
@@ -97,12 +97,13 @@ private slots:
 	void onTick();
 
 private:
-	ZoominatorController();
-	~ZoominatorController() override;
-	ZoominatorController(const ZoominatorController &) = delete;
-	ZoominatorController &operator=(const ZoominatorController &) = delete;
+	MotionCraftController();
+	~MotionCraftController() override;
+	MotionCraftController(const MotionCraftController &) = delete;
+	MotionCraftController &operator=(const MotionCraftController &) = delete;
 
 	QString configPath() const;
+	QString legacyConfigPath() const;
 
 	void ensureTicking(bool on);
 	void resetState();
@@ -290,7 +291,7 @@ private:
 	vec2 sceneContentMin{};
 	vec2 sceneContentMax{};
 
-	QPointer<ZoominatorDialog> dialog;
+	QPointer<MotionCraftDialog> dialog;
 	obs_source_t *markerSource = nullptr;
 
 	int followToggleHotkeyVk = 0;
