@@ -148,18 +148,53 @@ MotionCraftDialog::MotionCraftDialog(QWidget *parent) : QDialog(parent)
 
 	refreshLists();
 	loadFromController();
+
+	/* Escape does not send a close event. QDialog::reject() hides the dialog
+	 * and, with WA_DeleteOnClose, deletes it - so hanging the teardown off
+	 * closeEvent alone left OBS holding a pointer to a freed dialog, and the
+	 * next frontend event dereferenced it. Applying here keeps Escape
+	 * behaving like the window's close button, which has always applied. */
+	connect(this, &QDialog::finished, this, &MotionCraftDialog::detach);
 }
 
-void MotionCraftDialog::closeEvent(QCloseEvent *event)
+MotionCraftDialog::~MotionCraftDialog()
 {
+	/* Last line of defence. Whatever destroyed this dialog - Escape, the
+	 * close button, or the OBS main window taking its children with it -
+	 * OBS must not be left holding a callback into freed memory. */
+	unregisterCallbacks();
+}
+
+/* Both idempotent: several paths lead here, and on some of them more than one
+ * fires. Registering happens once in the constructor, so unregistering must
+ * happen exactly once too. */
+void MotionCraftDialog::unregisterCallbacks()
+{
+	if (!callbacksRegistered)
+		return;
+	callbacksRegistered = false;
+
 	obs_frontend_remove_event_callback(frontend_event_cb, this);
 
 	auto *sh = obs_get_signal_handler();
 	signal_handler_disconnect(sh, "source_create", &MotionCraftDialog::obsSourceChanged, this);
 	signal_handler_disconnect(sh, "source_destroy", &MotionCraftDialog::obsSourceChanged, this);
 	signal_handler_disconnect(sh, "source_rename", &MotionCraftDialog::obsSourceChanged, this);
+}
 
+void MotionCraftDialog::detach()
+{
+	if (detached)
+		return;
+	detached = true;
+
+	unregisterCallbacks();
 	applyToController();
+}
+
+void MotionCraftDialog::closeEvent(QCloseEvent *event)
+{
+	detach();
 	QDialog::closeEvent(event);
 }
 

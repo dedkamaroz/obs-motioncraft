@@ -19,11 +19,15 @@ class MotionCraftDialog final : public QDialog {
 
 public:
 	explicit MotionCraftDialog(QWidget *parent = nullptr);
+	~MotionCraftDialog() override;
 
 protected:
 	void closeEvent(QCloseEvent *event) override;
 
 private slots:
+	/* Hand everything back to OBS and save what the user typed. Reached from
+	 * the close button, from Escape, and from the destructor as a backstop. */
+	void detach();
 	void refreshLists();
 	void applyToController();
 	void testZoom();
@@ -34,6 +38,13 @@ private slots:
 	void populateSourcesTab();
 
 private:
+	void unregisterCallbacks();
+
+	/* OBS holds raw pointers to this dialog for the duration of both, so they
+	 * have to be handed back exactly once, on every destruction path. */
+	bool callbacksRegistered = true;
+	bool detached = false;
+
 	void buildUi();
 	void buildZoomLevelsTab();
 	void buildWiggleTab();
