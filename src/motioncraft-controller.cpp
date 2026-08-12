@@ -653,6 +653,7 @@ void MotionCraftController::loadSettings()
 	followMouseRuntimeEnabled = true;
 	followSpeed = 8.0;
 	centerCursorUntilEdge = true;
+	normaliseFollowRange = false;
 	followFromPreview = false;
 	mouseIdleTimeoutMs = 0;
 	portraitCover = true;
@@ -832,6 +833,8 @@ void MotionCraftController::loadSettings()
 		centerCursorUntilEdge = obs_data_get_bool(data, "center_cursor_until_edge");
 	if (obs_data_has_user_value(data, "follow_from_preview"))
 		followFromPreview = obs_data_get_bool(data, "follow_from_preview");
+	if (obs_data_has_user_value(data, "normalise_follow_range"))
+		normaliseFollowRange = obs_data_get_bool(data, "normalise_follow_range");
 	if (obs_data_has_user_value(data, "mouse_idle_timeout_ms"))
 		mouseIdleTimeoutMs = (int)obs_data_get_int(data, "mouse_idle_timeout_ms");
 	mouseIdleTimeoutMs = std::clamp(mouseIdleTimeoutMs, 0, 60000);
@@ -940,6 +943,7 @@ void MotionCraftController::saveSettings()
 	obs_data_set_double(data, "follow_speed", followSpeed);
 	obs_data_set_bool(data, "center_cursor_until_edge", centerCursorUntilEdge);
 	obs_data_set_bool(data, "follow_from_preview", followFromPreview);
+	obs_data_set_bool(data, "normalise_follow_range", normaliseFollowRange);
 	obs_data_set_int(data, "mouse_idle_timeout_ms", mouseIdleTimeoutMs);
 	obs_data_set_bool(data, "portrait_cover", portraitCover);
 	obs_data_set_bool(data, "show_cursor_marker", showCursorMarker);
@@ -2259,11 +2263,13 @@ static bool match_window_rect_for_source(obs_source_t *src, LinuxRect &rcOut)
 #endif
 
 bool MotionCraftController::mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy,
-						  bool &cursorInside) const
+						  bool &cursorInside, float &relXOut, float &relYOut) const
 {
 	cursorInside = false;
 	sx = 0.f;
 	sy = 0.f;
+	relXOut = 0.5f;
+	relYOut = 0.5f;
 
 	int rx = 0, ry = 0, rw = 0, rh = 0;
 	if (!getSelectedScreenRect(rx, ry, rw, rh) || rw <= 0 || rh <= 0)
@@ -2281,6 +2287,9 @@ bool MotionCraftController::mapCursorToScenePixels(int cursorX, int cursorY, flo
 	const double ch = haveVi ? (double)ovi.base_height : 1080.0;
 	if (cw <= 0.0 || ch <= 0.0)
 		return false;
+
+	relXOut = (float)relX;
+	relYOut = (float)relY;
 
 	if (centerCursorUntilEdge && sceneContentBoundsValid) {
 		const double contentW = std::max(1.0, (double)sceneContentMax.x - (double)sceneContentMin.x);
@@ -2357,11 +2366,13 @@ bool MotionCraftController::ensurePreviewTracked()
 }
 
 bool MotionCraftController::mapPreviewCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy,
-							 bool &cursorInside)
+							 bool &cursorInside, float &relXOut, float &relYOut)
 {
 	cursorInside = false;
 	sx = 0.f;
 	sy = 0.f;
+	relXOut = 0.5f;
+	relYOut = 0.5f;
 
 	obs_video_info ovi{};
 	const bool haveVi = obs_get_video_info(&ovi);
@@ -2433,6 +2444,8 @@ bool MotionCraftController::mapPreviewCursorToScenePixels(int cursorX, int curso
 	 * content and has no meaning here. */
 	sx = (float)clampd(canvasX, 0.0, cw);
 	sy = (float)clampd(canvasY, 0.0, ch);
+	relXOut = (float)(sx / cw);
+	relYOut = (float)(sy / ch);
 	cursorInside = true;
 	return true;
 }
@@ -2720,8 +2733,11 @@ bool MotionCraftController::captureMarkerClickPosition()
 
 	int cx = 0, cy = 0;
 	float mx = 0.f, my = 0.f;
+	float relX = 0.f, relY = 0.f;
 	bool inside = false;
-	const bool mapped = getCursorPos(cx, cy) && mapCursorToScenePixels(cx, cy, mx, my, inside);
+	/* The halo marks where the click happened, so it always wants the literal
+	 * scene position, never a normalised one. */
+	const bool mapped = getCursorPos(cx, cy) && mapCursorToScenePixels(cx, cy, mx, my, inside, relX, relY);
 	if (!mapped || !inside)
 		return false;
 
@@ -3003,6 +3019,7 @@ void MotionCraftController::applyZoomToScene(double z)
 	 * scene out from under us mid-frame. */
 	obs_source_t *sceneSource = nullptr;
 	float snapX = 0.0f, snapY = 0.0f;
+	float snapRelX = 0.5f, snapRelY = 0.5f;
 	bool snapMapped = false, snapInside = false, snapFocused = true;
 	{
 		std::lock_guard<std::mutex> lock(inputMutex);
@@ -3013,6 +3030,8 @@ void MotionCraftController::applyZoomToScene(double z)
 		snapFocused = input.focused;
 		snapX = input.sceneX;
 		snapY = input.sceneY;
+		snapRelX = input.relX;
+		snapRelY = input.relY;
 	}
 
 	obs_scene_t *scene = sceneSource ? obs_scene_from_source(sceneSource) : nullptr;
@@ -3096,6 +3115,54 @@ void MotionCraftController::applyZoomToScene(double z)
 	const float my = snapY;
 	const bool mapped = snapMapped;
 
+	/* The focal points that can actually be centred at this zoom.
+	 *
+	 * An item covers the canvas at offset zero exactly when
+	 *     anchor + (itemMin - f) * z <= 0   and   anchor + (itemMax - f) * z >= cw
+	 * which rearranges to f >= itemMin + anchor/z and f <= itemMax + (anchor - cw)/z.
+	 * Every framing item has to agree, so the band is their intersection, and
+	 * unlike the clamp further down it does not depend on f - which is what
+	 * makes it usable to choose f in the first place.
+	 *
+	 * It widens as the zoom does: at z = 1 it is a single point, because an
+	 * unzoomed scene has nothing to pan to. Mapping the pointer across it is
+	 * what makes the whole pointer travel useful at every zoom level, instead
+	 * of only the (z-1)/z of it that is not pinned against an edge. */
+	double bandLoX = 0.0, bandHiX = 0.0, bandLoY = 0.0, bandHiY = 0.0;
+	bool haveBandX = false, haveBandY = false;
+	if (normaliseFollowRange) {
+		for (const auto &state : sceneItems) {
+			if (!state.framesContent || !state.orig.valid || !isLiveItem(state.item))
+				continue;
+
+			const double loX = (double)state.framingMin.x + (double)anchorX / z;
+			const double hiX = (double)state.framingMax.x + ((double)anchorX - cw) / z;
+			if (loX <= hiX) {
+				bandLoX = haveBandX ? std::max(bandLoX, loX) : loX;
+				bandHiX = haveBandX ? std::min(bandHiX, hiX) : hiX;
+				haveBandX = true;
+			}
+
+			const double loY = (double)state.framingMin.y + (double)anchorY / z;
+			const double hiY = (double)state.framingMax.y + ((double)anchorY - ch) / z;
+			if (loY <= hiY) {
+				bandLoY = haveBandY ? std::max(bandLoY, loY) : loY;
+				bandHiY = haveBandY ? std::min(bandHiY, hiY) : hiY;
+				haveBandY = true;
+			}
+		}
+		/* Nothing can cover, or the items that can disagree: fall back to the
+		 * canvas centre, which is the one framing that is always defensible. */
+		if (!haveBandX || bandLoX > bandHiX) {
+			bandLoX = bandHiX = haveBandX ? (bandLoX + bandHiX) * 0.5 : centerX;
+			haveBandX = true;
+		}
+		if (!haveBandY || bandLoY > bandHiY) {
+			bandLoY = bandHiY = haveBandY ? (bandLoY + bandHiY) * 0.5 : centerY;
+			haveBandY = true;
+		}
+	}
+
 	/* What the follow should chase this frame, if anything.
 	 *
 	 * Not focused - only ever reported when following the preview, since a
@@ -3115,6 +3182,14 @@ void MotionCraftController::applyZoomToScene(double z)
 		haveSample = true;
 	} else if (mapped && snapInside) {
 		haveSample = true;
+		if (normaliseFollowRange) {
+			/* The pointer picks a position along the reachable band rather
+			 * than a scene coordinate, so its full travel always sweeps the
+			 * full pan - and the point it selects is still centred exactly,
+			 * because every point in the band can be. */
+			sampleX = (float)(bandLoX + (double)snapRelX * (bandHiX - bandLoX));
+			sampleY = (float)(bandLoY + (double)snapRelY * (bandHiY - bandLoY));
+		}
 	}
 
 	const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -3485,9 +3560,10 @@ void MotionCraftController::onTick()
 	float sx = 0.0f, sy = 0.0f;
 	bool insideNow = false;
 	bool mappedNow = false;
+	float relX = 0.5f, relY = 0.5f;
 	if (getCursorPos(cx, cy)) {
-		mappedNow = followFromPreview ? mapPreviewCursorToScenePixels(cx, cy, sx, sy, insideNow)
-					      : mapCursorToScenePixels(cx, cy, sx, sy, insideNow);
+		mappedNow = followFromPreview ? mapPreviewCursorToScenePixels(cx, cy, sx, sy, insideNow, relX, relY)
+					      : mapCursorToScenePixels(cx, cy, sx, sy, insideNow, relX, relY);
 	}
 
 	/* Only meaningful when following the preview. Following the screen means
@@ -3506,6 +3582,8 @@ void MotionCraftController::onTick()
 		input.focused = focusedNow;
 		input.sceneX = sx;
 		input.sceneY = sy;
+		input.relX = relX;
+		input.relY = relY;
 	}
 	if (previousRef)
 		obs_source_release(previousRef);

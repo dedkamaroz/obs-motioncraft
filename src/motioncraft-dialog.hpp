@@ -66,6 +66,7 @@ private:
 	QComboBox *cmbFollowSource = nullptr;
 	QDoubleSpinBox *spFollowSpeed = nullptr;
 	QCheckBox *chkCenterCursorUntilEdge = nullptr;
+	QCheckBox *chkNormaliseFollowRange = nullptr;
 	QSpinBox *spMouseIdleTimeout = nullptr;
 	QCheckBox *chkPortraitCover = nullptr;
 	QCheckBox *chkShowCursorMarker = nullptr;

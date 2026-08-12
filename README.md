@@ -16,6 +16,7 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 - **Five assignable zoom levels** — each with its own hotkey and its own in / out timing. Pressing a level's key while already zoomed moves straight there, carrying the current speed through rather than restarting.
 - **Smart clamping** — the canvas stays fully covered, with no background showing through, even with cropped or rotated sources.
 - **Two ways to aim** — follow the desktop cursor across a chosen monitor (right when the scene *is* that screen), or point at the canvas in OBS's own preview panel (right when the scene is video or images). The preview mapping tracks the panel as you resize, zoom or scroll it, so the focal point is always the canvas pixel under the pointer.
+- **Full range at any zoom** — optionally maps the pointer's whole travel onto the framing that can actually be reached, so a gentle zoom steers as readily as a deep one. Without it only the fraction `(z-1)/z` of the pointer's range moves anything: about 7% at the small zoom the wiggle asks for, 50% at 2x, 75% at 4x.
 - **Holds when you look away** — in preview mode the focal point stays put when the pointer leaves the canvas, and returns to centre — keeping the current zoom level — when OBS is not the active window.
 - **Ultrawide edge tracking** — optionally keeps the cursor centred until the captured scene reaches an edge.
 - **Idle freeze** — pauses following after a configurable idle timeout, and resumes on movement.
@@ -107,6 +108,7 @@ The geometry is checked offline, without OBS, so the maths can be verified witho
 cl /EHsc /O2 tests\wiggle-test.cpp && wiggle-test.exe
 cl /EHsc /O2 tests\plugin-toggle-test.cpp && plugin-toggle-test.exe
 cl /EHsc /O2 tests\preview-mapping-test.cpp && preview-mapping-test.exe
+cl /EHsc /O2 testsollow-range-test.cpp && follow-range-test.exe
 cl /EHsc /O2 tests\framing-clamp-test.cpp && framing-clamp-test.exe
 cl /EHsc /O2 tests\zoom-geometry-test.cpp && zoom-geometry-test.exe
 cl /EHsc /O2 tests\zoom-level-timing-test.cpp && zoom-level-timing-test.exe

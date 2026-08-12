@@ -282,6 +282,10 @@ void MotionCraftDialog::buildUi()
 		lay->addLayout(followRow);
 		lay->addWidget(chkCenterCursorUntilEdge);
 
+		chkNormaliseFollowRange = new QCheckBox(T("Dialog.NormaliseFollowRange"), page);
+		chkNormaliseFollowRange->setToolTip(T("Dialog.NormaliseFollowRangeTooltip"));
+		lay->addWidget(chkNormaliseFollowRange);
+
 		addSection(lay, T("Dialog.Section.Canvas"));
 
 		chkPortraitCover = new QCheckBox(T("Dialog.PortraitCover"), page);
@@ -712,6 +716,7 @@ void MotionCraftDialog::loadFromController()
 		cmbFollowSource->setCurrentIndex(c.followFromPreview ? 1 : 0);
 		spFollowSpeed->setValue(c.followSpeed);
 		chkCenterCursorUntilEdge->setChecked(c.centerCursorUntilEdge);
+		chkNormaliseFollowRange->setChecked(c.normaliseFollowRange);
 		spMouseIdleTimeout->setValue(c.mouseIdleTimeoutMs);
 		chkPortraitCover->setChecked(c.portraitCover);
 		chkShowCursorMarker->setChecked(c.showCursorMarker);
@@ -773,6 +778,7 @@ void MotionCraftDialog::applyToController()
 	c.followFromPreview = cmbFollowSource->currentData().toBool();
 	c.followSpeed = spFollowSpeed->value();
 	c.centerCursorUntilEdge = chkCenterCursorUntilEdge->isChecked();
+	c.normaliseFollowRange = chkNormaliseFollowRange->isChecked();
 	c.mouseIdleTimeoutMs = spMouseIdleTimeout->value();
 	c.portraitCover = chkPortraitCover->isChecked();
 	c.showCursorMarker = chkShowCursorMarker->isChecked();

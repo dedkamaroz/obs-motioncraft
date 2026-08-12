@@ -115,6 +115,20 @@ public:
 	double followSpeed = 8.0;
 	bool centerCursorUntilEdge = true;
 
+	/* Map the pointer's full travel onto the range that can actually be
+	 * reached at the current zoom, instead of onto canvas coordinates.
+	 *
+	 * Without it the pointer picks a scene point and the framing clamp refuses
+	 * most of them: only the fraction (z-1)/z of the travel moves anything at
+	 * all, and the rest sits pinned against an edge. At a zoom of 1.08 - what
+	 * the wiggle alone asks for - that is seven percent of the pointer's
+	 * range doing all the work.
+	 *
+	 * Off by default because a screen capture wants the opposite: the zoom
+	 * must land on the actual cursor, wherever that is, even if most of the
+	 * screen cannot be centred. */
+	bool normaliseFollowRange = false;
+
 	/* Where the focal point comes from.
 	 *
 	 * Screen: the desktop cursor on the selected monitor, mapped across that
@@ -209,11 +223,13 @@ private:
 	void enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const;
 
 	bool getCursorPos(int &x, int &y) const;
-	bool mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside) const;
+	bool mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside,
+				    float &relX, float &relY) const;
 
 	/* Preview-relative variant. Not const: it caches the widget it found and
 	 * connects to it on first use. */
-	bool mapPreviewCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside);
+	bool mapPreviewCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside,
+					   float &relX, float &relY);
 	bool ensurePreviewTracked();
 
 	/* OBS's preview panel, found by object name rather than by including its
@@ -281,6 +297,12 @@ private:
 		bool focused = true;
 		float sceneX = 0.0f;
 		float sceneY = 0.0f;
+
+		/* The same pointer position as a fraction of the region being
+		 * followed. Kept alongside the scene coordinates because only the
+		 * graphics thread knows the zoom, and normalising needs both. */
+		float relX = 0.5f;
+		float relY = 0.5f;
 		obs_source_t *sceneRef = nullptr; /* strong ref owned by the snapshot */
 	};
 
