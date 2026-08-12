@@ -187,6 +187,10 @@ void MotionCraftDialog::buildUi()
 		chkPluginEnabled = new QCheckBox(T("Dialog.PluginEnabled"), page);
 		chkPluginEnabled->setToolTip(T("Dialog.PluginEnabledTooltip"));
 		lay->addWidget(chkPluginEnabled);
+
+		auto *startsOff = new QLabel(T("Dialog.PluginStartsOffHelp"), page);
+		startsOff->setWordWrap(true);
+		lay->addWidget(startsOff);
 		lay->addSpacing(8);
 
 		auto *pluginHkRow = new QWidget(page);
@@ -366,6 +370,15 @@ void MotionCraftDialog::buildUi()
 	connect(btnTest, &QPushButton::clicked, this, &MotionCraftDialog::testZoom);
 	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &MotionCraftDialog::clearFollowToggleHotkey);
 	connect(btnClearPluginToggleHotkey, &QPushButton::clicked, this, &MotionCraftDialog::clearPluginToggleHotkey);
+	/* A switch, not a setting: it takes effect where it is clicked rather than
+	 * waiting for Apply, because the whole point of it is to stop the plugin
+	 * touching anything right now. */
+	connect(chkPluginEnabled, &QCheckBox::toggled, this, [this](bool on) {
+		if (loading)
+			return;
+		MotionCraftController::instance().setPluginEnabled(on);
+		lblStatus->setText(on ? T("Dialog.PluginEnabledStatus") : T("Dialog.PluginDisabledStatus"));
+	});
 	/* The toggle key can flip this while the dialog is open, so the checkbox
 	 * follows the controller rather than only being read at Apply. */
 	connect(&MotionCraftController::instance(), &MotionCraftController::settingsChanged, this,
@@ -732,11 +745,6 @@ void MotionCraftDialog::applyToController()
 
 	auto &c = MotionCraftController::instance();
 
-	/* First: everything below is settings, and settings on a disabled plugin
-	 * should just be recorded. Disabling here also tears down any live zoom or
-	 * wiggle before the rest of this function can try to restart one. */
-	c.setPluginEnabled(chkPluginEnabled->isChecked());
-
 	c.screenKey = cmbSource->currentData().toString();
 	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
 
@@ -792,7 +800,8 @@ void MotionCraftDialog::applyToController()
 	}
 
 	/* Last, because switching the wiggle on captures the scene, and that has to
-	 * see the included-source list and the amplitudes this Apply just set. */
+	 * see the included-source list and the amplitudes this Apply just set.
+	 * A disabled plugin records the preference without acting on it. */
 	c.setWiggleEnabled(chkWiggleEnabled->isChecked());
 
 	c.saveSettings();

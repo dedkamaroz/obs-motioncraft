@@ -31,7 +31,8 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 
 ### Everything Off
 
-- **One key disables the plugin entirely** — any zoom and wiggle unwind, every source goes back exactly as it was, and MotionCraft stops listening for anything except that key. Press it again to bring it back.
+- **Off until you switch it on** — MotionCraft starts disabled every time OBS launches. Nothing is captured, no transform is touched and no keyboard hook is installed until you say so.
+- **One switch, or one key** — the checkbox on the Target tab takes effect immediately, and an optional hotkey does the same from anywhere. Switching off unwinds any zoom and wiggle and puts every source back exactly as it was; switching on restores whatever you had configured, wiggle included.
 
 Wiggle ranges are deliberately narrow — position 0–5 px, rotation 0–1°, scale 0–2 %, speed 0–5× — because this is meant to be felt rather than seen.
 
@@ -43,12 +44,10 @@ Wiggle ranges are deliberately narrow — position 0–5 px, rotation 0–1°, s
 2. Under **Sources**, tick the sources the camera should carry. Anything left unticked stays put — a webcam overlay or a watermark, say.
 3. Under **Zoom Levels**, set a zoom factor and a hotkey for each level you want.
 4. Under **Wiggle**, set the amounts and tick **Enable wiggle**.
-5. Optionally set an **Enable / Disable Hotkey** on the **Target** tab, for switching the whole plugin off mid-stream.
-6. **Apply.**
+5. **Apply.**
+6. Tick **Enable MotionCraft** on the **Target** tab — it takes effect immediately. Bind the **Enable / Disable Hotkey** there too if you want to do this without opening the window.
 
-The wiggle starts as soon as you apply it and stays on until you untick it. If it was running when you closed OBS, it resumes once your scenes have loaded.
-
-The enable/disable state itself is runtime only — OBS always starts with MotionCraft enabled, so a plugin switched off during one session never looks broken in the next. The key binding is remembered.
+Everything above is remembered except the on/off state itself: **MotionCraft starts switched off every time OBS launches**. A plugin that installs a system-wide keyboard hook and rewrites scene transforms should be something you turn on, not something you find already running. Switching it on restores everything you configured, including a wiggle that was set up earlier.
 
 ---
 

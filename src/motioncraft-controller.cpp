@@ -540,16 +540,10 @@ void MotionCraftController::frontendEventCallback(enum obs_frontend_event event,
 		QTimer::singleShot(3000, ctl, [ctl]() { cleanup_legacy_marker_items_all_scenes(ctl->markerSource); });
 	}
 
-	/* Resume a wiggle that was running when OBS was closed, but only once the
-	 * scenes are actually there, and only after the recovery restore above has
-	 * had its turn - starting first would capture transforms that are still
-	 * mid-restore and bake the last session's drift in as the original. */
-	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING && ctl->wiggleEnabled) {
-		QTimer::singleShot(1500, ctl, [ctl]() {
-			if (ctl->wiggleEnabled && ctl->pluginEnabled && !ctl->shuttingDown)
-				ctl->setWiggleEnabled(true);
-		});
-	}
+	/* No wiggle is resumed here. The plugin starts switched off, so the moment
+	 * a saved wiggle should come back is when it is switched on - which
+	 * setPluginEnabled handles, and which is also safely after any recovery
+	 * restore rather than racing it. */
 }
 
 void MotionCraftController::markRecoveryActive()
@@ -1224,15 +1218,22 @@ void MotionCraftController::setPluginEnabled(bool on)
 
 	/* Deferred to the next turn of the event loop because this is normally
 	 * reached from inside the keyboard hook, and Windows drops a low-level
-	 * hook whose callback overruns LowLevelHooksTimeout. Rebuilding hooks and
-	 * repainting the dialog are both far too much to do in that window. The
-	 * hook callback runs on this thread, so a zero-delay timer lands as soon
-	 * as it returns. */
-	QTimer::singleShot(0, this, [this]() {
+	 * hook whose callback overruns LowLevelHooksTimeout. Rebuilding hooks,
+	 * capturing a scene for the wiggle and repainting the dialog are all far
+	 * too much to do in that window. The hook callback runs on this thread, so
+	 * a zero-delay timer lands as soon as it returns. */
+	QTimer::singleShot(0, this, [this, on]() {
 		if (shuttingDown)
 			return;
 		uninstallHooks();
 		installHooks();
+
+		/* Switching the plugin on restores what it was configured to be
+		 * doing, rather than leaving a ticked Enable Wiggle box inert until
+		 * the next Apply. */
+		if (on && wiggleEnabled)
+			setWiggleEnabled(true);
+
 		emit settingsChanged();
 	});
 }

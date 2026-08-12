@@ -97,12 +97,14 @@ public:
 
 	/* The plugin's own on/off. Off unwinds any zoom and wiggle, puts every
 	 * transform back and stops listening for everything except the key that
-	 * turns it on again - so it costs nothing while it is off.
+	 * turns it on again - so it costs nothing while it is off, and nothing
+	 * about a scene is touched until it is deliberately switched on.
 	 *
-	 * Runtime state, not a setting: OBS always starts enabled, the same way
-	 * the Follow Mouse runtime toggle does. A plugin that silently stayed off
-	 * across a restart would just look broken. The key binding IS persisted. */
-	bool pluginEnabled = true;
+	 * Runtime state, not a setting, and off at every OBS start: a plugin that
+	 * installs a system-wide keyboard hook and rewrites scene transforms
+	 * should be something you turn on, not something you find already
+	 * running. The key binding and everything else IS persisted. */
+	bool pluginEnabled = false;
 	KeyTrigger pluginToggle;
 
 	void setPluginEnabled(bool on);
