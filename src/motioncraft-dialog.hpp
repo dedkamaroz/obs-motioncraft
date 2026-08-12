@@ -63,6 +63,7 @@ private:
 	QCheckBox *chkHotkeysEnabled = nullptr;
 
 	QCheckBox *chkFollow = nullptr;
+	QComboBox *cmbFollowSource = nullptr;
 	QDoubleSpinBox *spFollowSpeed = nullptr;
 	QCheckBox *chkCenterCursorUntilEdge = nullptr;
 	QSpinBox *spMouseIdleTimeout = nullptr;

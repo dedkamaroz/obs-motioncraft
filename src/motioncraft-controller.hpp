@@ -5,6 +5,7 @@
 
 #include <QObject>
 #include <QPointer>
+#include <QWidget>
 #include <QKeySequence>
 #include <QSet>
 #include <QSocketNotifier>
@@ -18,6 +19,12 @@
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
+/* Windows.h defines min and max as macros, which breaks every std::min and
+ * std::max that is textually reached afterwards. Everything here used to be
+ * included before the standard headers by luck of ordering; say so instead. */
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <Windows.h>
 #undef WIN32_LEAN_AND_MEAN
 #elif defined(__APPLE__)
@@ -105,6 +112,18 @@ public:
 	bool followMouseRuntimeEnabled = true;
 	double followSpeed = 8.0;
 	bool centerCursorUntilEdge = true;
+
+	/* Where the focal point comes from.
+	 *
+	 * Screen: the desktop cursor on the selected monitor, mapped across that
+	 * whole monitor. This is what the plugin has always done, and it is the
+	 * right model when the scene IS your screen.
+	 *
+	 * Preview: the pointer over the canvas inside OBS's own preview panel, so
+	 * you aim the shot by pointing at it. The right model when the scene is
+	 * composed of video or images rather than a capture of the screen you are
+	 * moving the mouse on. */
+	bool followFromPreview = false;
 	int mouseIdleTimeoutMs = 0;
 	bool portraitCover = true;
 	bool showCursorMarker = false;
@@ -190,6 +209,34 @@ private:
 	bool getCursorPos(int &x, int &y) const;
 	bool mapCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside) const;
 
+	/* Preview-relative variant. Not const: it caches the widget it found and
+	 * connects to it on first use. */
+	bool mapPreviewCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy, bool &cursorInside);
+	bool ensurePreviewTracked();
+
+	/* OBS's preview panel, found by object name rather than by including its
+	 * header - it is not part of any public API. Everything read from it is
+	 * either plain Qt geometry or one of the two signals it advertises, and if
+	 * a future OBS renames any of it the lookup fails and the follow falls
+	 * back to the selected screen rather than misbehaving. */
+	QPointer<QWidget> previewWidget;
+	QPointer<QObject> previewScrollX;
+	QPointer<QObject> previewScrollY;
+	bool previewTrackingReady = false;
+	bool previewLookupFailed = false;
+	bool previewFixedScaling = false;
+
+	/* Device pixels per canvas pixel, as OBS last computed it. Zero means it
+	 * has not told us yet, in which case the fit is computed here - which is
+	 * exactly right for Scale to Window, the mode OBS always starts in. */
+	float previewScalingAmount = 0.0f;
+
+private slots:
+	void onPreviewScalingChanged(float scalingAmount);
+	void onPreviewFixedScalingChanged(bool fixed);
+
+private:
+
 	void captureOriginal(obs_sceneitem_t *item);
 	void restoreOriginal(obs_sceneitem_t *item);
 	void captureOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items);
@@ -225,6 +272,11 @@ private:
 	struct InputSnapshot {
 		bool mapped = false;
 		bool inside = false;
+
+		/* Whether the thing being pointed at is actually in front of the
+		 * user. Always true when following the screen, where OBS is normally
+		 * in the background by design. */
+		bool focused = true;
 		float sceneX = 0.0f;
 		float sceneY = 0.0f;
 		obs_source_t *sceneRef = nullptr; /* strong ref owned by the snapshot */

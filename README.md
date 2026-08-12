@@ -15,6 +15,8 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 - **Scene-wide zoom and pan** — smoothly transforms the whole scene based on mouse position.
 - **Five assignable zoom levels** — each with its own hotkey and its own in / out timing. Pressing a level's key while already zoomed moves straight there, carrying the current speed through rather than restarting.
 - **Smart clamping** — the canvas stays fully covered, with no background showing through, even with cropped or rotated sources.
+- **Two ways to aim** — follow the desktop cursor across a chosen monitor (right when the scene *is* that screen), or point at the canvas in OBS's own preview panel (right when the scene is video or images). The preview mapping tracks the panel as you resize, zoom or scroll it, so the focal point is always the canvas pixel under the pointer.
+- **Holds when you look away** — in preview mode the focal point stays put when the pointer leaves the canvas, and returns to centre — keeping the current zoom level — when OBS is not the active window.
 - **Ultrawide edge tracking** — optionally keeps the cursor centred until the captured scene reaches an edge.
 - **Idle freeze** — pauses following after a configurable idle timeout, and resumes on movement.
 - **Click halo** — optional click-only visual feedback with a configurable ring.
@@ -105,6 +107,7 @@ The geometry is checked offline, without OBS, so the maths can be verified witho
 ```bash
 cl /EHsc /O2 tests\wiggle-test.cpp && wiggle-test.exe
 cl /EHsc /O2 tests\plugin-toggle-test.cpp && plugin-toggle-test.exe
+cl /EHsc /O2 tests\preview-mapping-test.cpp && preview-mapping-test.exe
 cl /EHsc /O2 tests\framing-clamp-test.cpp && framing-clamp-test.exe
 cl /EHsc /O2 tests\zoom-geometry-test.cpp && zoom-geometry-test.exe
 cl /EHsc /O2 tests\zoom-level-timing-test.cpp && zoom-level-timing-test.exe

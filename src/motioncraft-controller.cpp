@@ -659,6 +659,7 @@ void MotionCraftController::loadSettings()
 	followMouseRuntimeEnabled = true;
 	followSpeed = 8.0;
 	centerCursorUntilEdge = true;
+	followFromPreview = false;
 	mouseIdleTimeoutMs = 0;
 	portraitCover = true;
 	showCursorMarker = false;
@@ -835,6 +836,8 @@ void MotionCraftController::loadSettings()
 		followSpeed = 8.0;
 	if (obs_data_has_user_value(data, "center_cursor_until_edge"))
 		centerCursorUntilEdge = obs_data_get_bool(data, "center_cursor_until_edge");
+	if (obs_data_has_user_value(data, "follow_from_preview"))
+		followFromPreview = obs_data_get_bool(data, "follow_from_preview");
 	if (obs_data_has_user_value(data, "mouse_idle_timeout_ms"))
 		mouseIdleTimeoutMs = (int)obs_data_get_int(data, "mouse_idle_timeout_ms");
 	mouseIdleTimeoutMs = std::clamp(mouseIdleTimeoutMs, 0, 60000);
@@ -942,6 +945,7 @@ void MotionCraftController::saveSettings()
 	followMouseRuntimeEnabled = true;
 	obs_data_set_double(data, "follow_speed", followSpeed);
 	obs_data_set_bool(data, "center_cursor_until_edge", centerCursorUntilEdge);
+	obs_data_set_bool(data, "follow_from_preview", followFromPreview);
 	obs_data_set_int(data, "mouse_idle_timeout_ms", mouseIdleTimeoutMs);
 	obs_data_set_bool(data, "portrait_cover", portraitCover);
 	obs_data_set_bool(data, "show_cursor_marker", showCursorMarker);
@@ -2286,6 +2290,149 @@ bool MotionCraftController::mapCursorToScenePixels(int cursorX, int cursorY, flo
 	return true;
 }
 
+/* OBS lays the canvas out inside its preview panel in OBSBasic::ResizePreview:
+ * the drawable area is the widget inset by PREVIEW_EDGE_SIZE on every side, the
+ * canvas is centred in it, and when the preview is zoomed the scroll offset is
+ * added. Reproduced here from the widget's own geometry so the focal point
+ * lands on the canvas pixel actually under the pointer at any preview size,
+ * scaling mode or scroll position. */
+static constexpr int kObsPreviewEdgeSize = 10;
+
+void MotionCraftController::onPreviewScalingChanged(float scalingAmount)
+{
+	previewScalingAmount = scalingAmount;
+}
+
+void MotionCraftController::onPreviewFixedScalingChanged(bool fixed)
+{
+	previewFixedScaling = fixed;
+}
+
+/* Find OBS's preview panel and subscribe to the two things about it that
+ * cannot be derived from geometry. The connections are made by signal
+ * signature rather than by function pointer precisely so that no OBS header is
+ * needed; a rename in some future OBS makes the connect fail, which is logged
+ * and downgraded to computing the fit, not a crash. */
+bool MotionCraftController::ensurePreviewTracked()
+{
+	if (previewWidget && previewTrackingReady)
+		return true;
+	if (previewLookupFailed && !previewWidget)
+		return false;
+
+	auto *mainWindow = static_cast<QWidget *>(obs_frontend_get_main_window());
+	if (!mainWindow)
+		return false;
+
+	previewWidget = mainWindow->findChild<QWidget *>(QStringLiteral("preview"));
+	if (!previewWidget) {
+		if (!previewLookupFailed)
+			blog(LOG_WARNING, "[MotionCraft] OBS preview panel not found; "
+					  "follow-from-preview is unavailable in this OBS build.");
+		previewLookupFailed = true;
+		return false;
+	}
+
+	previewScrollX = mainWindow->findChild<QObject *>(QStringLiteral("previewXScrollBar"));
+	previewScrollY = mainWindow->findChild<QObject *>(QStringLiteral("previewYScrollBar"));
+
+	const bool gotScaling = connect(previewWidget, SIGNAL(scalingChanged(float)), this,
+					SLOT(onPreviewScalingChanged(float)), Qt::UniqueConnection);
+	const bool gotFixed = connect(previewWidget, SIGNAL(fixedScalingChanged(bool)), this,
+				      SLOT(onPreviewFixedScalingChanged(bool)), Qt::UniqueConnection);
+	if (!gotScaling || !gotFixed) {
+		/* Not fatal. OBS always starts in Scale to Window, whose layout is
+		 * computed here anyway; only the zoomed modes need these. */
+		blog(LOG_WARNING, "[MotionCraft] OBS preview scaling signals unavailable; "
+				  "preview zoom will not be tracked.");
+	}
+
+	previewTrackingReady = true;
+	previewLookupFailed = false;
+	return true;
+}
+
+bool MotionCraftController::mapPreviewCursorToScenePixels(int cursorX, int cursorY, float &sx, float &sy,
+							 bool &cursorInside)
+{
+	cursorInside = false;
+	sx = 0.f;
+	sy = 0.f;
+
+	obs_video_info ovi{};
+	const bool haveVi = obs_get_video_info(&ovi);
+	const double cw = haveVi ? (double)ovi.base_width : 1920.0;
+	const double ch = haveVi ? (double)ovi.base_height : 1080.0;
+	if (cw <= 0.0 || ch <= 0.0)
+		return false;
+
+	if (!ensurePreviewTracked() || !previewWidget || !previewWidget->isVisible())
+		return false;
+
+	/* Pointing at something requires being able to see it, and a preview
+	 * behind another window is not being pointed at. Reported as "not inside"
+	 * rather than as a failure, so the focal point holds where it was. */
+	if (QGuiApplication::applicationState() != Qt::ApplicationActive)
+		return true;
+
+	const double dpr = previewWidget->devicePixelRatioF() > 0.0 ? previewWidget->devicePixelRatioF() : 1.0;
+	const double widgetW = (double)previewWidget->width() * dpr;
+	const double widgetH = (double)previewWidget->height() * dpr;
+	const double availW = widgetW - 2.0 * kObsPreviewEdgeSize;
+	const double availH = widgetH - 2.0 * kObsPreviewEdgeSize;
+	if (availW <= 0.0 || availH <= 0.0)
+		return false;
+
+	double scale = 0.0;
+	double scrollX = 0.0;
+	double scrollY = 0.0;
+
+	if (previewFixedScaling && previewScalingAmount > 0.0f) {
+		scale = (double)previewScalingAmount;
+		/* OBSBasicPreview keeps its scroll as the negated scrollbar value. */
+		if (previewScrollX)
+			scrollX = -(double)previewScrollX->property("value").toInt();
+		if (previewScrollY)
+			scrollY = -(double)previewScrollY->property("value").toInt();
+	} else {
+		/* Scale to Window: the canvas is fitted to the drawable area, which
+		 * is a function of the widget alone. */
+		scale = std::min(availW / cw, availH / ch);
+	}
+	if (scale <= 0.0)
+		return false;
+
+	const double drawnW = cw * scale;
+	const double drawnH = ch * scale;
+	const double originX = (availW - drawnW) * 0.5 + kObsPreviewEdgeSize + scrollX;
+	const double originY = (availH - drawnH) * 0.5 + kObsPreviewEdgeSize + scrollY;
+
+	const QPoint local = previewWidget->mapFromGlobal(QPoint(cursorX, cursorY));
+	const double px = (double)local.x() * dpr - originX;
+	const double py = (double)local.y() * dpr - originY;
+
+	const double canvasX = px / scale;
+	const double canvasY = py / scale;
+
+	/* Outside the canvas rect - the letterbox around it, or anywhere else in
+	 * the OBS window - is deliberately not a focal point.
+	 *
+	 * Half a pixel of tolerance because the very edge of the canvas is on the
+	 * canvas, and a scale division that lands on 1920.0000001 should not be
+	 * what decides otherwise. */
+	if (canvasX < -0.5 || canvasX > cw + 0.5 || canvasY < -0.5 || canvasY > ch + 0.5)
+		return true;
+
+	/* Preview coordinates are canvas coordinates, so unlike the screen path
+	 * there is nothing to remap: the point under the pointer is the point.
+	 * centerCursorUntilEdge exists to stretch a monitor across the scene
+	 * content and has no meaning here. */
+	sx = (float)clampd(canvasX, 0.0, cw);
+	sy = (float)clampd(canvasY, 0.0, ch);
+	cursorInside = true;
+	return true;
+}
+
 static void remove_legacy_marker_items(obs_scene_t *scene, obs_source_t *currentMarkerSource)
 {
 	if (!scene)
@@ -2852,13 +2999,14 @@ void MotionCraftController::applyZoomToScene(double z)
 	 * scene out from under us mid-frame. */
 	obs_source_t *sceneSource = nullptr;
 	float snapX = 0.0f, snapY = 0.0f;
-	bool snapMapped = false, snapInside = false;
+	bool snapMapped = false, snapInside = false, snapFocused = true;
 	{
 		std::lock_guard<std::mutex> lock(inputMutex);
 		if (input.sceneRef)
 			sceneSource = obs_source_get_ref(input.sceneRef);
 		snapMapped = input.mapped;
 		snapInside = input.inside;
+		snapFocused = input.focused;
 		snapX = input.sceneX;
 		snapY = input.sceneY;
 	}
@@ -2943,16 +3091,36 @@ void MotionCraftController::applyZoomToScene(double z)
 	const float mx = snapX;
 	const float my = snapY;
 	const bool mapped = snapMapped;
-	(void)snapInside;
+
+	/* What the follow should chase this frame, if anything.
+	 *
+	 * Not focused - only ever reported when following the preview, since a
+	 * screen capture is normally driven from another application - means come
+	 * back to the middle of the canvas. The zoom level is untouched; it is the
+	 * framing that returns to neutral.
+	 *
+	 * Nothing at all when the pointer is off the region being followed. The
+	 * lerp below then has no target and the focal point simply stays where it
+	 * was, which is what "hold until it comes back" means. */
+	bool haveSample = false;
+	float sampleX = mx;
+	float sampleY = my;
+	if (!snapFocused) {
+		sampleX = (float)centerX;
+		sampleY = (float)centerY;
+		haveSample = true;
+	} else if (mapped && snapInside) {
+		haveSample = true;
+	}
 
 	const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-	if (mapped) {
-		const double sampleDx = (double)mx - (double)lastCursorSampleX;
-		const double sampleDy = (double)my - (double)lastCursorSampleY;
+	if (haveSample) {
+		const double sampleDx = (double)sampleX - (double)lastCursorSampleX;
+		const double sampleDy = (double)sampleY - (double)lastCursorSampleY;
 		const bool cursorMoved = !lastCursorSampleValid || sampleDx * sampleDx + sampleDy * sampleDy >= 0.25;
 		if (cursorMoved) {
-			lastCursorSampleX = mx;
-			lastCursorSampleY = my;
+			lastCursorSampleX = sampleX;
+			lastCursorSampleY = sampleY;
 			lastCursorSampleValid = true;
 			lastCursorMovementMs = nowMs;
 			mouseTrackingIdle = false;
@@ -2964,14 +3132,14 @@ void MotionCraftController::applyZoomToScene(double z)
 
 	if (followMouse && followMouseRuntimeEnabled && !mouseTrackingIdle) {
 		targetHasPos = false;
-		if (mapped) {
+		if (haveSample) {
 			if (!followHasPos) {
-				followX = mx;
-				followY = my;
+				followX = sampleX;
+				followY = sampleY;
 				followHasPos = true;
 			} else {
-				const double dx = (double)mx - (double)followX;
-				const double dy = (double)my - (double)followY;
+				const double dx = (double)sampleX - (double)followX;
+				const double dy = (double)sampleY - (double)followY;
 				const double dist = std::sqrt(dx * dx + dy * dy);
 
 				const double effectiveSpeed = clampd(followSpeed, 0.25, 30.0);
@@ -3312,7 +3480,17 @@ void MotionCraftController::onTick()
 	int cx = 0, cy = 0;
 	float sx = 0.0f, sy = 0.0f;
 	bool insideNow = false;
-	const bool mappedNow = getCursorPos(cx, cy) && mapCursorToScenePixels(cx, cy, sx, sy, insideNow);
+	bool mappedNow = false;
+	if (getCursorPos(cx, cy)) {
+		mappedNow = followFromPreview ? mapPreviewCursorToScenePixels(cx, cy, sx, sy, insideNow)
+					      : mapCursorToScenePixels(cx, cy, sx, sy, insideNow);
+	}
+
+	/* Only meaningful when following the preview. Following the screen means
+	 * working in some other application, where OBS being in the background is
+	 * the normal case and must not recentre anything. */
+	const bool focusedNow =
+		!followFromPreview || (QGuiApplication::applicationState() == Qt::ApplicationActive);
 
 	obs_source_t *previousRef = nullptr;
 	{
@@ -3321,6 +3499,7 @@ void MotionCraftController::onTick()
 		input.sceneRef = sceneSource; /* ownership transferred */
 		input.mapped = mappedNow;
 		input.inside = insideNow;
+		input.focused = focusedNow;
 		input.sceneX = sx;
 		input.sceneY = sy;
 	}

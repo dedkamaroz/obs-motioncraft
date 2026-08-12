@@ -254,6 +254,13 @@ void MotionCraftDialog::buildUi()
 		spMouseIdleTimeout->setSpecialValueText(T("Dialog.Disabled"));
 		spMouseIdleTimeout->setToolTip(T("Dialog.MouseIdleTimeoutTooltip"));
 
+		cmbFollowSource = new QComboBox(page);
+		cmbFollowSource->addItem(T("Dialog.FollowSource.Screen"), false);
+		cmbFollowSource->addItem(T("Dialog.FollowSource.Preview"), true);
+		cmbFollowSource->setToolTip(T("Dialog.FollowSourceTooltip"));
+		lay->addWidget(mkField(T("Dialog.FollowSource"), cmbFollowSource));
+		lay->addSpacing(10);
+
 		auto *followRow = new QHBoxLayout;
 		followRow->setSpacing(12);
 
@@ -689,6 +696,7 @@ void MotionCraftDialog::loadFromController()
 
 	{
 		chkFollow->setChecked(c.followMouse);
+		cmbFollowSource->setCurrentIndex(c.followFromPreview ? 1 : 0);
 		spFollowSpeed->setValue(c.followSpeed);
 		chkCenterCursorUntilEdge->setChecked(c.centerCursorUntilEdge);
 		spMouseIdleTimeout->setValue(c.mouseIdleTimeoutMs);
@@ -754,6 +762,7 @@ void MotionCraftDialog::applyToController()
 	}
 
 	c.followMouse = chkFollow->isChecked();
+	c.followFromPreview = cmbFollowSource->currentData().toBool();
 	c.followSpeed = spFollowSpeed->value();
 	c.centerCursorUntilEdge = chkCenterCursorUntilEdge->isChecked();
 	c.mouseIdleTimeoutMs = spMouseIdleTimeout->value();
