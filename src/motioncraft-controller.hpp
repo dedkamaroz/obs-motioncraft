@@ -88,6 +88,32 @@ public:
 	int markerThickness = 4;
 	bool debug = false;
 
+	/* Wiggle: a handheld-camera drift laid on top of whatever the zoom is
+	 * doing, driven by the same captured transforms. The ranges are
+	 * deliberately narrow - this is meant to read as a camera operator
+	 * breathing, not as a shake effect, and anything larger has to be paid
+	 * for with a bigger safety scale (see wiggleSafetyScale). */
+	static constexpr double kWigglePositionMaxPx = 5.0;
+	static constexpr double kWiggleRotationMaxDeg = 1.0;
+	static constexpr double kWiggleScaleMaxPct = 2.0;
+	static constexpr double kWiggleSpeedMax = 5.0;
+
+	/* How often a new speed is drawn from [min, max], and the time constant of
+	 * the glide onto it. The glide is short enough that the speed is settled
+	 * for most of each window but never steps discontinuously. */
+	static constexpr double kWiggleSpeedSampleSec = 0.5;
+	static constexpr double kWiggleSpeedGlideSec = 0.08;
+
+	bool wiggleEnabled = false;
+	double wigglePositionPx = 2.0;
+	double wiggleRotationDeg = 0.3;
+	double wiggleScalePct = 0.5;
+	double wiggleSpeedMin = 1.0;
+	double wiggleSpeedMax = 2.0;
+	int wiggleSeed = 1234;
+
+	void setWiggleEnabled(bool on);
+
 	QSet<QString> includedSources;
 
 signals:
@@ -124,6 +150,13 @@ private:
 	double levelZoom(int level) const;
 	double timelineMsForZoom(double z, bool zoomingIn) const;
 	void beginSegment(int level);
+
+	/* True only when wiggle is running AND some amplitude is actually set;
+	 * an all-zero wiggle must cost nothing and must not force the safety
+	 * scale on. */
+	bool wiggleShaping() const;
+	double wiggleSafetyScale() const;
+	void updateWiggleSpeed(double seconds);
 
 	bool getSelectedScreenRect(int &x, int &y, int &w, int &h) const;
 	void enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const;
@@ -210,6 +243,24 @@ private:
 	std::atomic<bool> retargetRequested{false};
 	std::atomic<bool> segmentRunning{false};
 
+	/* Set by the main thread when the user turns wiggle on or off, read by the
+	 * graphics thread. It keeps the tick alive at zoom 1.0, which is the only
+	 * structural difference between wiggling and zooming. */
+	std::atomic<bool> wiggleRunning{false};
+
+	/* Graphics-thread only. Phase is integrated rather than derived from a
+	 * clock times speed, so a speed change bends the motion instead of
+	 * teleporting it. */
+	double wigglePhase = 0.0;
+	double wiggleSpeedCurrent = 0.0;
+	double wiggleSpeedTarget = 0.0;
+	double wiggleSpeedTimer = 0.0;
+	uint32_t wiggleSpeedRng = 0;
+
+	/* Computed once per capture: how much every item has to be enlarged so the
+	 * drift cannot pull the canvas background into view. */
+	double wiggleSafety = 1.0;
+
 	bool followHasPos = false;
 	float followX = 0.0f;
 	float followY = 0.0f;
@@ -260,6 +311,7 @@ private:
 		bool lastAppliedValid = false;
 		vec2 lastAppliedPos{};
 		vec2 lastAppliedScale{};
+		float lastAppliedRot = 0.0f;
 
 		/* Unzoomed on-screen bounds of this item alone, used by the framing
 		 * clamp. False for items that were hidden when the zoom started: they

@@ -132,6 +132,39 @@ static inline void rotation_sin_cos(float degrees, float &sinOut, float &cosOut)
 	cosOut = (float)std::cos(rad);
 }
 
+/* 32-bit avalanche mix (Murmur3 finaliser). The wiggle's noise needs
+ * neighbouring integers to hash to unrelated values; a bare multiplicative
+ * hash does not give that, because the low bits of k * K advance by a fixed
+ * step as k increments, so successive samples land on an arithmetic ramp and
+ * the "noise" comes out as a regular zigzag rather than a drift. */
+static inline uint32_t wiggle_hash(uint32_t k)
+{
+	k ^= k >> 16;
+	k *= 0x85ebca6bu;
+	k ^= k >> 13;
+	k *= 0xc2b2ae35u;
+	k ^= k >> 16;
+	return k;
+}
+
+/* Value noise in [-1, 1]: one random value per integer step of t, joined with
+ * smoothstep. Continuous and zero-derivative at the knots, which is what makes
+ * the motion read as a hand holding a camera rather than as a vibration. */
+static inline double wiggle_noise(double t, uint32_t seed)
+{
+	const double base = std::floor(t);
+	const double frac = t - base;
+	const uint32_t i = (uint32_t)(int32_t)base;
+
+	auto sample = [seed](uint32_t k) {
+		return ((double)wiggle_hash(seed + k) / 4294967295.0) * 2.0 - 1.0;
+	};
+
+	const double v0 = sample(i);
+	const double v1 = sample(i + 1u);
+	return v0 + (v1 - v0) * smoothstep(frac);
+}
+
 /* Write-suppression threshold for scale. Position is in pixels, where the 0.01
  * default is a sane "nothing changed" epsilon, but scale is a ratio: 0.01 there
  * is 1% of the source, i.e. tens of pixels of rendered size. Sharing the pixel
@@ -506,6 +539,17 @@ void MotionCraftController::frontendEventCallback(enum obs_frontend_event event,
 		QTimer::singleShot(750, ctl, [ctl]() { ctl->requestRecoveryRestore(); });
 		QTimer::singleShot(3000, ctl, [ctl]() { cleanup_legacy_marker_items_all_scenes(ctl->markerSource); });
 	}
+
+	/* Resume a wiggle that was running when OBS was closed, but only once the
+	 * scenes are actually there, and only after the recovery restore above has
+	 * had its turn - starting first would capture transforms that are still
+	 * mid-restore and bake the last session's drift in as the original. */
+	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING && ctl->wiggleEnabled) {
+		QTimer::singleShot(1500, ctl, [ctl]() {
+			if (ctl->wiggleEnabled && !ctl->shuttingDown)
+				ctl->setWiggleEnabled(true);
+		});
+	}
 }
 
 void MotionCraftController::markRecoveryActive()
@@ -623,6 +667,14 @@ void MotionCraftController::loadSettings()
 	markerSize = 26;
 	markerThickness = 4;
 	debug = false;
+
+	wiggleEnabled = false;
+	wigglePositionPx = 2.0;
+	wiggleRotationDeg = 0.3;
+	wiggleScalePct = 0.5;
+	wiggleSpeedMin = 1.0;
+	wiggleSpeedMax = 2.0;
+	wiggleSeed = 1234;
 
 	const QString p = configPath();
 	if (p.isEmpty())
@@ -803,6 +855,29 @@ void MotionCraftController::loadSettings()
 	if (obs_data_has_user_value(data, "debug"))
 		debug = obs_data_get_bool(data, "debug");
 
+	if (obs_data_has_user_value(data, "wiggle_enabled"))
+		wiggleEnabled = obs_data_get_bool(data, "wiggle_enabled");
+	if (obs_data_has_user_value(data, "wiggle_position_px"))
+		wigglePositionPx = obs_data_get_double(data, "wiggle_position_px");
+	if (obs_data_has_user_value(data, "wiggle_rotation_deg"))
+		wiggleRotationDeg = obs_data_get_double(data, "wiggle_rotation_deg");
+	if (obs_data_has_user_value(data, "wiggle_scale_pct"))
+		wiggleScalePct = obs_data_get_double(data, "wiggle_scale_pct");
+	if (obs_data_has_user_value(data, "wiggle_speed_min"))
+		wiggleSpeedMin = obs_data_get_double(data, "wiggle_speed_min");
+	if (obs_data_has_user_value(data, "wiggle_speed_max"))
+		wiggleSpeedMax = obs_data_get_double(data, "wiggle_speed_max");
+	if (obs_data_has_user_value(data, "wiggle_seed"))
+		wiggleSeed = (int)obs_data_get_int(data, "wiggle_seed");
+
+	wigglePositionPx = clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx);
+	wiggleRotationDeg = clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg);
+	wiggleScalePct = clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct);
+	wiggleSpeedMin = clampd(wiggleSpeedMin, 0.0, kWiggleSpeedMax);
+	wiggleSpeedMax = clampd(wiggleSpeedMax, 0.0, kWiggleSpeedMax);
+	if (wiggleSpeedMax < wiggleSpeedMin)
+		std::swap(wiggleSpeedMin, wiggleSpeedMax);
+
 	includedSources.clear();
 	obs_data_array_t *incArr = obs_data_get_array(data, "included_sources");
 	if (incArr) {
@@ -873,6 +948,15 @@ void MotionCraftController::saveSettings()
 	obs_data_set_int(data, "marker_size", markerSize);
 	obs_data_set_int(data, "marker_thickness", markerThickness);
 	obs_data_set_bool(data, "debug", debug);
+
+	obs_data_set_bool(data, "wiggle_enabled", wiggleEnabled);
+	obs_data_set_double(data, "wiggle_position_px", wigglePositionPx);
+	obs_data_set_double(data, "wiggle_rotation_deg", wiggleRotationDeg);
+	obs_data_set_double(data, "wiggle_scale_pct", wiggleScalePct);
+	obs_data_set_double(data, "wiggle_speed_min", wiggleSpeedMin);
+	obs_data_set_double(data, "wiggle_speed_max", wiggleSpeedMax);
+	obs_data_set_int(data, "wiggle_seed", wiggleSeed);
+
 	obs_data_set_bool(data, "recovery_active", recoveryActive);
 	saveRecoveryMap(data);
 
@@ -919,6 +1003,86 @@ void MotionCraftController::ensureTicking(bool on)
 		if (tickTimer.isActive())
 			tickTimer.stop();
 	}
+}
+
+bool MotionCraftController::wiggleShaping() const
+{
+	if (!wiggleRunning.load(std::memory_order_acquire))
+		return false;
+	return wigglePositionPx > 0.0 || wiggleRotationDeg > 0.0 || wiggleScalePct > 0.0;
+}
+
+/* How much bigger every item has to be drawn so the drift cannot pull the
+ * canvas background into view.
+ *
+ * Each term answers "by what factor must a canvas-shaped rectangle grow so it
+ * still covers the canvas after this component's worst case?":
+ *
+ *   position  a shift of up to p in either direction needs p of overhang on
+ *             each edge, i.e. 2p more than the canvas on each axis;
+ *   rotation  a rectangle turned by th covers an axis-aligned one only if its
+ *             half-extents beat that one's support in both edge normals,
+ *             which gives (W|cos| + H|sin|)/W and (H|cos| + W|sin|)/H;
+ *   scale     the wiggle scales by 1 +/- s, so the shrink is what has to be
+ *             paid for: 1/(1 - s), not 1 + s.
+ *
+ * They compound, and 2% is added on top for the residual an item that is not
+ * centred or not canvas-shaped brings with it. This is a margin, not a proof -
+ * the per-frame framing clamp in applyZoomToScene is what actually guarantees
+ * no background is exposed, and it can only do that if there is slack here to
+ * work with. */
+double MotionCraftController::wiggleSafetyScale() const
+{
+	if (!wiggleShaping())
+		return 1.0;
+
+	obs_video_info ovi{};
+	const bool haveVi = obs_get_video_info(&ovi);
+	const double cw = haveVi && ovi.base_width > 0 ? (double)ovi.base_width : 1920.0;
+	const double ch = haveVi && ovi.base_height > 0 ? (double)ovi.base_height : 1080.0;
+
+	const double p = clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx);
+	const double posScale = std::max((cw + 2.0 * p) / cw, (ch + 2.0 * p) / ch);
+
+	const double th = clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg) * 3.14159265358979323846 / 180.0;
+	const double c = std::cos(th);
+	const double s = std::sin(th);
+	const double rotScale = std::max((cw * c + ch * s) / cw, (ch * c + cw * s) / ch);
+
+	const double sc = clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct) / 100.0;
+	const double scaleScale = 1.0 / std::max(0.01, 1.0 - sc);
+
+	return posScale * rotScale * scaleScale * 1.02;
+}
+
+/* Graphics thread only. Draws a fresh speed every kWiggleSpeedSampleSec and
+ * glides onto it, which is what turns a steady drift into something that
+ * hesitates and hurries the way a real hand does. Phase is integrated from the
+ * result, never recomputed as elapsed * speed, so changing speed bends the
+ * motion instead of jumping it. */
+void MotionCraftController::updateWiggleSpeed(double seconds)
+{
+	const double lo = clampd(std::min(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
+	const double hi = clampd(std::max(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
+
+	if (hi - lo <= 1e-6) {
+		wiggleSpeedTarget = lo;
+		wiggleSpeedCurrent = lo;
+	} else {
+		wiggleSpeedTimer -= seconds;
+		if (wiggleSpeedTimer <= 0.0) {
+			wiggleSpeedTimer += kWiggleSpeedSampleSec;
+			if (wiggleSpeedTimer <= 0.0)
+				wiggleSpeedTimer = kWiggleSpeedSampleSec;
+			wiggleSpeedRng = wiggle_hash(wiggleSpeedRng + 0x9e3779b9u);
+			const double u = (double)wiggleSpeedRng / 4294967295.0;
+			wiggleSpeedTarget = lo + u * (hi - lo);
+		}
+		const double blend = 1.0 - std::exp(-seconds / kWiggleSpeedGlideSec);
+		wiggleSpeedCurrent += (wiggleSpeedTarget - wiggleSpeedCurrent) * blend;
+	}
+
+	wigglePhase += seconds * wiggleSpeedCurrent;
 }
 
 double MotionCraftController::levelZoom(int level) const
@@ -1016,6 +1180,43 @@ void MotionCraftController::activateLevel(int level)
 	requestLevel((requestedLevel == pressed) ? 0 : pressed);
 }
 
+/* Wiggle's equivalent of requestLevel. It does not touch the zoom at all: it
+ * only keeps the tick alive at rest, which is the one thing the zoom loop would
+ * otherwise never do. Turning it off leaves the tick running until the zoom
+ * (if any) finishes on its own, and videoTick then tears everything down
+ * through the normal path. */
+void MotionCraftController::setWiggleEnabled(bool on)
+{
+	wiggleEnabled = on;
+
+	if (!on) {
+		wiggleRunning.store(false, std::memory_order_release);
+		return;
+	}
+
+	if (pendingFinish.exchange(false))
+		finishZoomOnMainThread();
+
+	const bool wasIdle = !tickingWanted.load(std::memory_order_acquire);
+	if (wasIdle) {
+		markRecoveryActive();
+		lastTickMs = 0;
+		pendingFinish.store(false, std::memory_order_release);
+		wigglePhase = 0.0;
+		wiggleSpeedTimer = 0.0;
+		wiggleSpeedCurrent = clampd(std::min(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
+		wiggleSpeedTarget = wiggleSpeedCurrent;
+		wiggleSpeedRng = (uint32_t)wiggleSeed;
+	}
+
+	wiggleRunning.store(true, std::memory_order_release);
+	tickingWanted.store(true, std::memory_order_release);
+	ensureTicking(true);
+
+	if (wasIdle)
+		onTick();
+}
+
 void MotionCraftController::requestLevel(int next)
 {
 	/* A level requested inside the teardown gap would otherwise re-capture the
@@ -1071,6 +1272,12 @@ void MotionCraftController::resetState()
 	zoomActive.store(false, std::memory_order_release);
 	tickingWanted.store(false, std::memory_order_release);
 	pendingFinish.store(false, std::memory_order_release);
+	wiggleRunning.store(false, std::memory_order_release);
+	wigglePhase = 0.0;
+	wiggleSpeedCurrent = 0.0;
+	wiggleSpeedTarget = 0.0;
+	wiggleSpeedTimer = 0.0;
+	wiggleSafety = 1.0;
 	requestedLevel = 0;
 	targetLevel.store(0, std::memory_order_relaxed);
 	retargetRequested.store(false, std::memory_order_relaxed);
@@ -2470,6 +2677,7 @@ void MotionCraftController::captureOriginalSceneItems(const std::vector<obs_scen
 {
 	sceneItems.clear();
 	sceneContentBoundsValid = false;
+	wiggleSafety = wiggleSafetyScale();
 	for (auto *item : items)
 		captureOriginal(item);
 
@@ -2619,6 +2827,45 @@ void MotionCraftController::applyZoomToScene(double z)
 	const double ch = haveVi ? (double)ovi.base_height : 1080.0;
 	const double centerX = cw * 0.5;
 	const double centerY = ch * 0.5;
+
+	/* Wiggle is a camera move, not a per-item one: one drift is sampled here
+	 * and every item is pushed, rolled and breathed by the same amount, about
+	 * the same point the zoom uses. Moving items independently would pull a
+	 * composed scene apart - the included-source list is what decides which
+	 * layers the camera carries. */
+	const bool wiggling = wiggleShaping();
+	const double ampPos = wiggling ? clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx) : 0.0;
+	const double ampRot = wiggling ? clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg) : 0.0;
+	const double ampScale = wiggling ? clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct) / 100.0 : 0.0;
+
+	double wiggleDriftX = 0.0;
+	double wiggleDriftY = 0.0;
+	double wiggleRoll = 0.0;
+	double wiggleBreath = 1.0;
+	if (wiggling) {
+		const uint32_t seed = (uint32_t)wiggleSeed;
+		wiggleDriftX = wiggle_noise(wigglePhase, seed) * ampPos;
+		wiggleDriftY = wiggle_noise(wigglePhase, seed + 1000u) * ampPos;
+		wiggleRoll = wiggle_noise(wigglePhase, seed + 2000u) * ampRot;
+		wiggleBreath = 1.0 + wiggle_noise(wigglePhase, seed + 3000u) * ampScale;
+	}
+
+	/* Two zoom values from here on.
+	 *
+	 * zApply is what the items are actually drawn at: the requested zoom, times
+	 * the safety enlargement the wiggle needs, times this frame's breath.
+	 *
+	 * z - which the framing clamp below is computed from - is the same thing at
+	 * the smallest the breath will ever get. Clamping against the worst case is
+	 * what makes the result valid for every frame: the applied box is this box
+	 * scaled up about the canvas centre, and growing a box about a point inside
+	 * the canvas cannot uncover an edge it already covered.
+	 *
+	 * With the wiggle off, safety is 1 and the breath is 1, so both collapse to
+	 * the value that was passed in and nothing about the zoom changes. */
+	const double safety = wiggling ? wiggleSafety : 1.0;
+	const double zApply = z * safety * wiggleBreath;
+	z *= safety * (1.0 - ampScale);
 
 	float fx = (float)centerX;
 	float fy = (float)centerY;
@@ -2775,24 +3022,75 @@ void MotionCraftController::applyZoomToScene(double z)
 	double offsetX = 0.0;
 	double offsetY = 0.0;
 
+	/* The interval the pan was actually clamped into. The wiggle's drift is a
+	 * pan like any other, so it has to live inside the same interval - that is
+	 * what keeps a drift at the far edge of a zoom from exposing the canvas
+	 * background. Where there is slack the drift is unaffected; where the zoom
+	 * has already been pushed flush against an edge it is what gives way. */
+	double panLoX = 0.0, panHiX = 0.0;
+	double panLoY = 0.0, panHiY = 0.0;
+
+	/* Slack the roll needs kept back from the pan.
+	 *
+	 * Rolling the composition by th about the canvas centre carries a canvas
+	 * point p to R(th)p, which is at most |p - centre| * 2sin(th/2) away, and
+	 * no canvas point is further from the centre than half the diagonal. So the
+	 * unrolled content covering the canvas grown by that much is enough for the
+	 * rolled content to cover the canvas itself.
+	 *
+	 * Without this the framing clamp would spend the entire safety margin on
+	 * panning closer to the zoom focus, leaving the content flush with the edge
+	 * and the roll free to swing it off. Reserved from the maximum roll rather
+	 * than this frame's, so the pan does not breathe with the wiggle. */
+	const double rollMargin =
+		wiggling ? std::hypot(cw, ch) * std::sin(ampRot * 3.14159265358979323846 / 360.0) : 0.0;
+	auto reserveRoll = [rollMargin](double &lo, double &hi) {
+		if (rollMargin <= 0.0)
+			return;
+		if (hi - lo <= 2.0 * rollMargin) {
+			/* Not enough room to reserve: centring what there is spreads the
+			 * shortfall evenly instead of dumping it all on one edge. */
+			lo = hi = (lo + hi) * 0.5;
+			return;
+		}
+		lo += rollMargin;
+		hi -= rollMargin;
+	};
+
 	if (haveX && loX <= hiX) {
-		offsetX = clampd(0.0, loX, hiX);
+		panLoX = loX;
+		panHiX = hiX;
 	} else if (minOffsetX <= maxOffsetX) {
-		offsetX = clampd(0.0, minOffsetX, maxOffsetX);
+		panLoX = minOffsetX;
+		panHiX = maxOffsetX;
 	} else {
-		offsetX = (minOffsetX + maxOffsetX) * 0.5;
+		panLoX = panHiX = (minOffsetX + maxOffsetX) * 0.5;
 	}
+	reserveRoll(panLoX, panHiX);
+	offsetX = clampd(0.0, panLoX, panHiX);
 
 	if (haveY && loY <= hiY) {
-		offsetY = clampd(0.0, loY, hiY);
+		panLoY = loY;
+		panHiY = hiY;
 	} else if (minOffsetY <= maxOffsetY) {
-		offsetY = clampd(0.0, minOffsetY, maxOffsetY);
+		panLoY = minOffsetY;
+		panHiY = maxOffsetY;
 	} else {
-		offsetY = (minOffsetY + maxOffsetY) * 0.5;
+		panLoY = panHiY = (minOffsetY + maxOffsetY) * 0.5;
+	}
+	reserveRoll(panLoY, panHiY);
+	offsetY = clampd(0.0, panLoY, panHiY);
+
+	if (wiggling) {
+		offsetX = clampd(offsetX + wiggleDriftX, panLoX, panHiX);
+		offsetY = clampd(offsetY + wiggleDriftY, panLoY, panHiY);
 	}
 
 	const qint64 nowApplyMs = nowMs;
-	const bool steadyFollow = followMouse && followMouseRuntimeEnabled && !mouseTrackingIdle &&
+	/* Skipping a frame because the follow anchor has not moved is only free
+	 * while nothing else is animating. A wiggle moves every frame by
+	 * definition, so the rate limiter has to stand down or the drift stutters. */
+	const bool steadyFollow = followMouse && followMouseRuntimeEnabled && !mouseTrackingIdle && !wiggling &&
 				  !segmentRunning.load(std::memory_order_relaxed);
 	if (steadyFollow) {
 		const float dx = anchorX - lastFollowAnchorX;
@@ -2801,8 +3099,8 @@ void MotionCraftController::applyZoomToScene(double z)
 		if (!anchorMovedEnough && nowApplyMs - lastTransformApplyMs < 16) {
 			std::lock_guard<std::mutex> lock(inputMutex);
 			pendingMarkerVisible = showCursorMarker && markerHasPoint;
-			pendingMarkerX = (double)anchorX + ((double)markerSceneX - (double)fx) * z + offsetX;
-			pendingMarkerY = (double)anchorY + ((double)markerSceneY - (double)fy) * z + offsetY;
+			pendingMarkerX = (double)anchorX + ((double)markerSceneX - (double)fx) * zApply + offsetX;
+			pendingMarkerY = (double)anchorY + ((double)markerSceneY - (double)fy) * zApply + offsetY;
 			return;
 		}
 	}
@@ -2826,12 +3124,26 @@ void MotionCraftController::applyZoomToScene(double z)
 		}
 
 		vec2 sc{};
-		sc.x = state.orig.effectiveScale.x * (float)z;
-		sc.y = state.orig.effectiveScale.y * (float)z;
+		sc.x = state.orig.effectiveScale.x * (float)zApply;
+		sc.y = state.orig.effectiveScale.y * (float)zApply;
 
 		vec2 pos{};
-		pos.x = (float)((double)anchorX + ((double)state.orig.effectivePos.x - (double)fx) * z + offsetX);
-		pos.y = (float)((double)anchorY + ((double)state.orig.effectivePos.y - (double)fy) * z + offsetY);
+		pos.x = (float)((double)anchorX + ((double)state.orig.effectivePos.x - (double)fx) * zApply + offsetX);
+		pos.y = (float)((double)anchorY + ((double)state.orig.effectivePos.y - (double)fy) * zApply + offsetY);
+
+		/* The roll turns the whole composition about the canvas centre, exactly
+		 * as tilting a camera would, so an item's position rotates with it
+		 * rather than the item spinning in place about its own anchor. The zoom
+		 * re-anchors items to their top-left corner, which is precisely the
+		 * pivot that would make spinning in place look wrong. */
+		if (wiggleRoll != 0.0) {
+			float rollSin = 0.0f, rollCos = 1.0f;
+			rotation_sin_cos((float)wiggleRoll, rollSin, rollCos);
+			const double dx = (double)pos.x - (double)anchorX;
+			const double dy = (double)pos.y - (double)anchorY;
+			pos.x = (float)((double)anchorX + dx * rollCos - dy * rollSin);
+			pos.y = (float)((double)anchorY + dx * rollSin + dy * rollCos);
+		}
 
 		if (!state.lastAppliedValid || !nearly_equal_vec2(state.lastAppliedScale, sc, kScaleEpsilon)) {
 			obs_sceneitem_set_scale(state.item, &sc);
@@ -2841,6 +3153,16 @@ void MotionCraftController::applyZoomToScene(double z)
 		if (!state.lastAppliedValid || !nearly_equal_vec2(state.lastAppliedPos, pos)) {
 			obs_sceneitem_set_pos(state.item, &pos);
 			state.lastAppliedPos = pos;
+		}
+
+		/* Written even when the wiggle is off, where the target is just the
+		 * captured rotation: that is what puts the item back after the wiggle
+		 * is switched off mid-zoom, and it is a no-op write in every other
+		 * case because the value has not changed. */
+		const float rotTarget = (float)((double)state.orig.rot + wiggleRoll);
+		if (!state.lastAppliedValid || !nearly_equal(state.lastAppliedRot, rotTarget, 0.001f)) {
+			obs_sceneitem_set_rot(state.item, rotTarget);
+			state.lastAppliedRot = rotTarget;
 		}
 
 		state.lastAppliedValid = true;
@@ -2854,8 +3176,8 @@ void MotionCraftController::applyZoomToScene(double z)
 	{
 		std::lock_guard<std::mutex> lock(inputMutex);
 		pendingMarkerVisible = showCursorMarker && markerHasPoint;
-		pendingMarkerX = (double)anchorX + ((double)markerSceneX - (double)fx) * z + offsetX;
-		pendingMarkerY = (double)anchorY + ((double)markerSceneY - (double)fy) * z + offsetY;
+		pendingMarkerX = (double)anchorX + ((double)markerSceneX - (double)fx) * zApply + offsetX;
+		pendingMarkerY = (double)anchorY + ((double)markerSceneY - (double)fy) * zApply + offsetY;
 	}
 }
 
@@ -2891,6 +3213,11 @@ void MotionCraftController::onTick()
 		if (sceneItems.empty())
 			return;
 	}
+
+	/* Refreshed here rather than only at capture so that changing an amplitude
+	 * while the wiggle is running re-sizes the safety margin with it, instead
+	 * of leaving the drift to overrun a margin bought for smaller numbers. */
+	wiggleSafety = wiggleSafetyScale();
 
 	obs_source_t *sceneSource = obs_frontend_get_current_scene();
 
@@ -2983,13 +3310,18 @@ void MotionCraftController::videoTick(double seconds)
 		}
 	}
 
-	if (!segmentRunning.load(std::memory_order_relaxed) && currentZoom <= 1.0) {
+	const bool wiggling = wiggleRunning.load(std::memory_order_acquire);
+
+	if (!segmentRunning.load(std::memory_order_relaxed) && currentZoom <= 1.0 && !wiggling) {
 		/* Stop touching shared state here, then let the main thread do the
 		 * restore, the settings write and the reset. */
 		zoomActive.store(false, std::memory_order_release);
 		pendingFinish.store(true, std::memory_order_release);
 		return;
 	}
+
+	if (wiggling)
+		updateWiggleSpeed(tickDeltaSeconds);
 
 	applyZoomToScene(currentZoom);
 }

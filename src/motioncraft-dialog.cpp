@@ -206,6 +206,7 @@ void MotionCraftDialog::buildUi()
 	}
 
 	buildZoomLevelsTab();
+	buildWiggleTab();
 
 	{
 		auto *page = new QWidget;
@@ -415,6 +416,95 @@ void MotionCraftDialog::buildZoomLevelsTab()
 	tabWidget->addTab(page, T("Dialog.Tab.ZoomLevels"));
 }
 
+void MotionCraftDialog::buildWiggleTab()
+{
+	auto *page = new QWidget;
+	auto *lay = new QVBoxLayout(page);
+	lay->setContentsMargins(20, 16, 20, 20);
+	lay->setSpacing(10);
+
+	chkWiggleEnabled = new QCheckBox(T("Dialog.Wiggle.Enable"), page);
+	chkWiggleEnabled->setToolTip(T("Dialog.Wiggle.EnableTooltip"));
+	lay->addWidget(chkWiggleEnabled);
+
+	auto *info = new QLabel(T("Dialog.Wiggle.Help"), page);
+	info->setWordWrap(true);
+	lay->addWidget(info);
+
+	addSection(lay, T("Dialog.Wiggle.Section.Amount"));
+
+	spWigglePosition = new QDoubleSpinBox(page);
+	spWigglePosition->setRange(0.0, MotionCraftController::kWigglePositionMaxPx);
+	spWigglePosition->setSingleStep(0.1);
+	spWigglePosition->setDecimals(2);
+	spWigglePosition->setSuffix(T("Unit.Pixels"));
+	spWigglePosition->setToolTip(T("Dialog.Wiggle.PositionTooltip"));
+
+	spWiggleRotation = new QDoubleSpinBox(page);
+	spWiggleRotation->setRange(0.0, MotionCraftController::kWiggleRotationMaxDeg);
+	spWiggleRotation->setSingleStep(0.05);
+	spWiggleRotation->setDecimals(2);
+	spWiggleRotation->setSuffix(T("Unit.Degrees"));
+	spWiggleRotation->setToolTip(T("Dialog.Wiggle.RotationTooltip"));
+
+	spWiggleScale = new QDoubleSpinBox(page);
+	spWiggleScale->setRange(0.0, MotionCraftController::kWiggleScaleMaxPct);
+	spWiggleScale->setSingleStep(0.1);
+	spWiggleScale->setDecimals(2);
+	spWiggleScale->setSuffix(T("Unit.Percent"));
+	spWiggleScale->setToolTip(T("Dialog.Wiggle.ScaleTooltip"));
+
+	auto *amountRow = new QHBoxLayout;
+	amountRow->setSpacing(12);
+	amountRow->addWidget(mkField(T("Dialog.Wiggle.Position"), spWigglePosition), 1);
+	amountRow->addWidget(mkField(T("Dialog.Wiggle.Rotation"), spWiggleRotation), 1);
+	amountRow->addWidget(mkField(T("Dialog.Wiggle.Scale"), spWiggleScale), 1);
+	lay->addLayout(amountRow);
+
+	addSection(lay, T("Dialog.Wiggle.Section.Speed"));
+
+	spWiggleSpeedMin = new QDoubleSpinBox(page);
+	spWiggleSpeedMin->setRange(0.0, MotionCraftController::kWiggleSpeedMax);
+	spWiggleSpeedMin->setSingleStep(0.1);
+	spWiggleSpeedMin->setDecimals(2);
+	spWiggleSpeedMin->setSuffix(T("Unit.Times"));
+
+	spWiggleSpeedMax = new QDoubleSpinBox(page);
+	spWiggleSpeedMax->setRange(0.0, MotionCraftController::kWiggleSpeedMax);
+	spWiggleSpeedMax->setSingleStep(0.1);
+	spWiggleSpeedMax->setDecimals(2);
+	spWiggleSpeedMax->setSuffix(T("Unit.Times"));
+
+	spWiggleSeed = new QSpinBox(page);
+	spWiggleSeed->setRange(0, 9999);
+	spWiggleSeed->setToolTip(T("Dialog.Wiggle.SeedTooltip"));
+
+	auto *speedRow = new QHBoxLayout;
+	speedRow->setSpacing(12);
+	speedRow->addWidget(mkField(T("Dialog.Wiggle.SpeedMin"), spWiggleSpeedMin), 1);
+	speedRow->addWidget(mkField(T("Dialog.Wiggle.SpeedMax"), spWiggleSpeedMax), 1);
+	speedRow->addWidget(mkField(T("Dialog.Wiggle.Seed"), spWiggleSeed), 1);
+	lay->addLayout(speedRow);
+
+	auto *speedHelp = new QLabel(T("Dialog.Wiggle.SpeedHelp"), page);
+	speedHelp->setWordWrap(true);
+	lay->addWidget(speedHelp);
+
+	/* Min above max is a state the user passes through while typing, so it is
+	 * corrected by nudging the other box rather than by refusing the edit. */
+	connect(spWiggleSpeedMin, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+		if (!loading && spWiggleSpeedMax->value() < v)
+			spWiggleSpeedMax->setValue(v);
+	});
+	connect(spWiggleSpeedMax, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+		if (!loading && spWiggleSpeedMin->value() > v)
+			spWiggleSpeedMin->setValue(v);
+	});
+
+	lay->addStretch(1);
+	tabWidget->addTab(page, T("Dialog.Tab.Wiggle"));
+}
+
 void MotionCraftDialog::populateSourcesTab()
 {
 	if (!lstSources)
@@ -583,6 +673,16 @@ void MotionCraftDialog::loadFromController()
 		chkDebug->setChecked(c.debug);
 	}
 
+	{
+		chkWiggleEnabled->setChecked(c.wiggleEnabled);
+		spWigglePosition->setValue(c.wigglePositionPx);
+		spWiggleRotation->setValue(c.wiggleRotationDeg);
+		spWiggleScale->setValue(c.wiggleScalePct);
+		spWiggleSpeedMin->setValue(c.wiggleSpeedMin);
+		spWiggleSpeedMax->setValue(c.wiggleSpeedMax);
+		spWiggleSeed->setValue(c.wiggleSeed);
+	}
+
 	if (lstSources)
 		lstSources->clear();
 	populateSourcesTab();
@@ -627,6 +727,13 @@ void MotionCraftDialog::applyToController()
 		c.markerColor = (uint32_t)btnMarkerColor->property("markerRgba").toUInt();
 	c.debug = chkDebug->isChecked();
 
+	c.wigglePositionPx = spWigglePosition->value();
+	c.wiggleRotationDeg = spWiggleRotation->value();
+	c.wiggleScalePct = spWiggleScale->value();
+	c.wiggleSpeedMin = spWiggleSpeedMin->value();
+	c.wiggleSpeedMax = spWiggleSpeedMax->value();
+	c.wiggleSeed = spWiggleSeed->value();
+
 	c.includedSources.clear();
 	if (lstSources) {
 		for (int i = 0; i < lstSources->count(); i++) {
@@ -635,6 +742,10 @@ void MotionCraftDialog::applyToController()
 				c.includedSources.insert(it->data(Qt::UserRole).toString());
 		}
 	}
+
+	/* Last, because switching the wiggle on captures the scene, and that has to
+	 * see the included-source list and the amplitudes this Apply just set. */
+	c.setWiggleEnabled(chkWiggleEnabled->isChecked());
 
 	c.saveSettings();
 	c.rebuildRuntimeHooks();

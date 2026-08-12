@@ -34,6 +34,7 @@ private slots:
 private:
 	void buildUi();
 	void buildZoomLevelsTab();
+	void buildWiggleTab();
 	void loadFromController();
 	void populateSources();
 	void updateMarkerColorButton(const QColor &color);
@@ -66,6 +67,14 @@ private:
 	QSpinBox *spMarkerThickness = nullptr;
 	QPushButton *btnMarkerColor = nullptr;
 	QCheckBox *chkDebug = nullptr;
+
+	QCheckBox *chkWiggleEnabled = nullptr;
+	QDoubleSpinBox *spWigglePosition = nullptr;
+	QDoubleSpinBox *spWiggleRotation = nullptr;
+	QDoubleSpinBox *spWiggleScale = nullptr;
+	QDoubleSpinBox *spWiggleSpeedMin = nullptr;
+	QDoubleSpinBox *spWiggleSpeedMax = nullptr;
+	QSpinBox *spWiggleSeed = nullptr;
 
 	QListWidget *lstSources = nullptr;
 
