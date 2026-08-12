@@ -1244,8 +1244,11 @@ void MotionCraftController::togglePluginEnabled()
 	 * others. hotkeysEnabled is deliberately not checked: that switch governs
 	 * the zoom and follow keys, and being unable to turn the plugin back on
 	 * because its own key had been filed under them would be a trap. */
-	if (!hotkeyFocusAllows())
+	if (!hotkeyFocusAllows()) {
+		blog(LOG_INFO, "[MotionCraft] Enable/disable hotkey ignored: OBS's hotkey focus policy "
+			       "(Settings -> Hotkeys) disallows it in this focus state.");
 		return;
+	}
 	setPluginEnabled(!pluginEnabled);
 }
 
@@ -4273,6 +4276,12 @@ void MotionCraftController::rebuildTriggersFromSettings()
 		parse_level_hotkey(lv);
 
 	parse_key_trigger(pluginToggleHotkeySequence, pluginToggle);
+	/* Logged unconditionally, not behind the debug flag. This binding is the
+	 * only way to switch a disabled plugin back on, so when it does not work
+	 * the first question is always whether it was understood at all. */
+	blog(LOG_INFO, "[MotionCraft] Enable/disable hotkey: \"%s\" -> vk 0x%02X, %s",
+	     pluginToggleHotkeySequence.toUtf8().constData(), pluginToggle.vk,
+	     pluginToggle.valid ? "usable" : "NOT USABLE (nothing bound, or a bare modifier)");
 
 	followToggleHkValid = false;
 	followToggleHotkeyVk = 0;
@@ -4416,14 +4425,17 @@ bool MotionCraftController::needsMouseHook() const
 
 void MotionCraftController::installHooks()
 {
-	if (!needsKeyboardHook() && !needsMouseHook())
+	if (!needsKeyboardHook() && !needsMouseHook()) {
+		blog(LOG_INFO, "[MotionCraft] No keyboard hook installed: nothing is bound that needs one.");
 		return;
+	}
 
 #ifdef _WIN32
 	g_ctl = this;
 
 	if (needsKeyboardHook() && !keyboardHook) {
 		keyboardHook = (void *)SetWindowsHookExW(WH_KEYBOARD_LL, kb_hook_proc, GetModuleHandleW(nullptr), 0);
+		blog(LOG_INFO, "[MotionCraft] Keyboard hook %s", keyboardHook ? "installed" : "FAILED to install");
 	}
 	if (needsMouseHook() && !mouseHook) {
 		mouseHook = (void *)SetWindowsHookExW(WH_MOUSE_LL, mouse_hook_proc, GetModuleHandleW(nullptr), 0);
