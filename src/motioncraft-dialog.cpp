@@ -184,6 +184,26 @@ void MotionCraftDialog::buildUi()
 		lay->setContentsMargins(20, 20, 20, 20);
 		lay->setSpacing(0);
 
+		chkPluginEnabled = new QCheckBox(T("Dialog.PluginEnabled"), page);
+		chkPluginEnabled->setToolTip(T("Dialog.PluginEnabledTooltip"));
+		lay->addWidget(chkPluginEnabled);
+		lay->addSpacing(8);
+
+		auto *pluginHkRow = new QWidget(page);
+		{
+			auto *h = new QHBoxLayout(pluginHkRow);
+			h->setContentsMargins(0, 0, 0, 0);
+			h->setSpacing(6);
+			editPluginToggleHotkey = new QKeySequenceEdit(pluginHkRow);
+			editPluginToggleHotkey->setToolTip(T("Dialog.PluginToggleHotkeyTooltip"));
+			btnClearPluginToggleHotkey = new QPushButton(T("Dialog.Clear"), pluginHkRow);
+			btnClearPluginToggleHotkey->setToolTip(T("Dialog.ClearPluginToggleTooltip"));
+			h->addWidget(editPluginToggleHotkey, 1);
+			h->addWidget(btnClearPluginToggleHotkey);
+		}
+		lay->addWidget(mkField(T("Dialog.PluginToggleHotkey"), pluginHkRow));
+		lay->addSpacing(16);
+
 		cmbSource = new QComboBox(page);
 		lay->addWidget(mkField(T("Dialog.TargetScreen"), cmbSource));
 		lay->addSpacing(16);
@@ -338,6 +358,11 @@ void MotionCraftDialog::buildUi()
 	connect(btnApply, &QPushButton::clicked, this, &MotionCraftDialog::applyToController);
 	connect(btnTest, &QPushButton::clicked, this, &MotionCraftDialog::testZoom);
 	connect(btnClearFollowToggleHotkey, &QPushButton::clicked, this, &MotionCraftDialog::clearFollowToggleHotkey);
+	connect(btnClearPluginToggleHotkey, &QPushButton::clicked, this, &MotionCraftDialog::clearPluginToggleHotkey);
+	/* The toggle key can flip this while the dialog is open, so the checkbox
+	 * follows the controller rather than only being read at Apply. */
+	connect(&MotionCraftController::instance(), &MotionCraftController::settingsChanged, this,
+		&MotionCraftDialog::syncPluginEnabledFromController);
 	connect(btnMarkerColor, &QPushButton::clicked, this, &MotionCraftDialog::chooseMarkerColor);
 }
 
@@ -648,6 +673,8 @@ void MotionCraftDialog::loadFromController()
 			cmbSource->setCurrentIndex(idx);
 
 		editFollowToggleHotkey->setKeySequence(QKeySequence(c.followToggleHotkeySequence));
+		editPluginToggleHotkey->setKeySequence(QKeySequence(c.pluginToggleHotkeySequence));
+		chkPluginEnabled->setChecked(c.pluginEnabled);
 	}
 
 	chkHotkeysEnabled->setChecked(c.hotkeysEnabled);
@@ -697,8 +724,20 @@ void MotionCraftDialog::applyToController()
 
 	auto &c = MotionCraftController::instance();
 
+	/* First: everything below is settings, and settings on a disabled plugin
+	 * should just be recorded. Disabling here also tears down any live zoom or
+	 * wiggle before the rest of this function can try to restart one. */
+	c.setPluginEnabled(chkPluginEnabled->isChecked());
+
 	c.screenKey = cmbSource->currentData().toString();
 	c.followToggleHotkeySequence = editFollowToggleHotkey->keySequence().toString(QKeySequence::NativeText);
+
+	/* A bare modifier would fire on its own constantly, and this key switches
+	 * the whole plugin, so drop it rather than store a trigger that cannot be
+	 * lived with. */
+	const QKeySequence pluginSeq = editPluginToggleHotkey->keySequence();
+	c.pluginToggleHotkeySequence =
+		key_sequence_is_modifier_only(pluginSeq) ? QString() : pluginSeq.toString(QKeySequence::NativeText);
 
 	c.hotkeysEnabled = chkHotkeysEnabled->isChecked();
 
@@ -761,6 +800,25 @@ void MotionCraftDialog::testZoom()
 void MotionCraftDialog::clearFollowToggleHotkey()
 {
 	editFollowToggleHotkey->setKeySequence(QKeySequence());
+}
+
+void MotionCraftDialog::clearPluginToggleHotkey()
+{
+	editPluginToggleHotkey->setKeySequence(QKeySequence());
+}
+
+void MotionCraftDialog::syncPluginEnabledFromController()
+{
+	if (!chkPluginEnabled)
+		return;
+	const bool on = MotionCraftController::instance().pluginEnabled;
+	if (chkPluginEnabled->isChecked() == on)
+		return;
+	const bool wasLoading = loading;
+	loading = true;
+	chkPluginEnabled->setChecked(on);
+	loading = wasLoading;
+	lblStatus->setText(on ? T("Dialog.PluginEnabledStatus") : T("Dialog.PluginDisabledStatus"));
 }
 
 void MotionCraftDialog::updateMarkerColorButton(const QColor &color)

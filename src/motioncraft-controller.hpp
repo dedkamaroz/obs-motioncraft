@@ -46,6 +46,19 @@ public:
 
 	QString screenKey;
 	QString followToggleHotkeySequence;
+	QString pluginToggleHotkeySequence;
+
+	/* A key plus its modifiers, resolved to whatever this platform's hooks
+	 * compare against. Derived from the stored sequence by
+	 * rebuildTriggersFromSettings(); never persisted in this form. */
+	struct KeyTrigger {
+		int vk = 0;
+		bool valid = false;
+		bool modCtrl = false;
+		bool modAlt = false;
+		bool modShift = false;
+		bool modWin = false;
+	};
 
 	/* One assignable zoom level. `inMs` / `outMs` are not segment durations:
 	 * they are time coordinates on a timeline whose origin is the unzoomed
@@ -74,6 +87,19 @@ public:
 	 * and the Follow Mouse toggle. Off means the keyboard hook is not
 	 * installed at all, so nothing is intercepted system-wide. */
 	bool hotkeysEnabled = true;
+
+	/* The plugin's own on/off. Off unwinds any zoom and wiggle, puts every
+	 * transform back and stops listening for everything except the key that
+	 * turns it on again - so it costs nothing while it is off.
+	 *
+	 * Runtime state, not a setting: OBS always starts enabled, the same way
+	 * the Follow Mouse runtime toggle does. A plugin that silently stayed off
+	 * across a restart would just look broken. The key binding IS persisted. */
+	bool pluginEnabled = true;
+	KeyTrigger pluginToggle;
+
+	void setPluginEnabled(bool on);
+	void togglePluginEnabled();
 
 	bool followMouse = true;
 	bool followMouseRuntimeEnabled = true;
@@ -247,6 +273,13 @@ private:
 	 * graphics thread. It keeps the tick alive at zoom 1.0, which is the only
 	 * structural difference between wiggling and zooming. */
 	std::atomic<bool> wiggleRunning{false};
+
+	/* Asks the graphics thread to drop everything and hand back to the main
+	 * thread for teardown. Routed through the same pendingFinish handshake as
+	 * a zoom that ends on its own, because that handshake is the only thing
+	 * that guarantees the graphics thread has stopped reading sceneItems
+	 * before the main thread clears it. */
+	std::atomic<bool> abortRequested{false};
 
 	/* Graphics-thread only. Phase is integrated rather than derived from a
 	 * clock times speed, so a speed change bends the motion instead of

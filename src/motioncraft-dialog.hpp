@@ -28,6 +28,8 @@ private slots:
 	void applyToController();
 	void testZoom();
 	void clearFollowToggleHotkey();
+	void clearPluginToggleHotkey();
+	void syncPluginEnabledFromController();
 	void chooseMarkerColor();
 	void populateSourcesTab();
 
@@ -46,6 +48,9 @@ private:
 	QComboBox *cmbSource = nullptr;
 	QKeySequenceEdit *editFollowToggleHotkey = nullptr;
 	QPushButton *btnClearFollowToggleHotkey = nullptr;
+	QCheckBox *chkPluginEnabled = nullptr;
+	QKeySequenceEdit *editPluginToggleHotkey = nullptr;
+	QPushButton *btnClearPluginToggleHotkey = nullptr;
 
 	struct LevelRow {
 		QDoubleSpinBox *zoom = nullptr;

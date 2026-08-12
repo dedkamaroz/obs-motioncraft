@@ -546,7 +546,7 @@ void MotionCraftController::frontendEventCallback(enum obs_frontend_event event,
 	 * mid-restore and bake the last session's drift in as the original. */
 	if (event == OBS_FRONTEND_EVENT_FINISHED_LOADING && ctl->wiggleEnabled) {
 		QTimer::singleShot(1500, ctl, [ctl]() {
-			if (ctl->wiggleEnabled && !ctl->shuttingDown)
+			if (ctl->wiggleEnabled && ctl->pluginEnabled && !ctl->shuttingDown)
 				ctl->setWiggleEnabled(true);
 		});
 	}
@@ -705,6 +705,7 @@ void MotionCraftController::loadSettings()
 	if (screenKey.isEmpty())
 		screenKey = getStr("source_name");
 	followToggleHotkeySequence = getStr("follow_toggle_hotkey");
+	pluginToggleHotkeySequence = getStr("plugin_toggle_hotkey");
 
 	QKeySequence followSeq(followToggleHotkeySequence);
 	if (!followSeq.isEmpty()) {
@@ -921,6 +922,7 @@ void MotionCraftController::saveSettings()
 	obs_data_t *data = obs_data_create();
 	obs_data_set_string(data, "screen_key", screenKey.toUtf8().constData());
 	obs_data_set_string(data, "follow_toggle_hotkey", followToggleHotkeySequence.toUtf8().constData());
+	obs_data_set_string(data, "plugin_toggle_hotkey", pluginToggleHotkeySequence.toUtf8().constData());
 
 	obs_data_array_t *levelArr = obs_data_array_create();
 	for (const ZoomLevel &lv : zoomLevels) {
@@ -1163,7 +1165,7 @@ void MotionCraftController::activateLevel(int level)
 	/* Gated here rather than in each platform's hook so no backend can drift.
 	 * requestLevel() is deliberately not gated: it is also the path that
 	 * unwinds a zoom when the hotkeys are switched off. */
-	if (!hotkeysEnabled || !hotkeyFocusAllows() || level < 1 || level > kZoomLevelCount)
+	if (!pluginEnabled || !hotkeysEnabled || !hotkeyFocusAllows() || level < 1 || level > kZoomLevelCount)
 		return;
 
 	/* The graphics thread flags a completed unzoom and the Qt timer does the
@@ -1180,6 +1182,68 @@ void MotionCraftController::activateLevel(int level)
 	requestLevel((requestedLevel == pressed) ? 0 : pressed);
 }
 
+/* The plugin's own on/off, reached from the toggle hotkey or the dialog.
+ *
+ * Switching off has to leave the scene exactly as it was found, so it does not
+ * simply stop driving: it asks the graphics thread to abort, which hands back
+ * through the same pendingFinish path a zoom uses when it ends by itself. That
+ * path is what restores every transform and clears the recovery marker. One
+ * frame later - under 17 ms - the scene is back to normal.
+ *
+ * Hooks are then rebuilt rather than torn down, because the toggle key itself
+ * still has to be heard. Everything else stops being listened for. */
+void MotionCraftController::setPluginEnabled(bool on)
+{
+	if (pluginEnabled == on)
+		return;
+
+	pluginEnabled = on;
+
+	if (!on) {
+		wiggleRunning.store(false, std::memory_order_release);
+		requestedLevel = 0;
+		targetLevel.store(0, std::memory_order_relaxed);
+		retargetRequested.store(false, std::memory_order_relaxed);
+
+		if (zoomActive.load(std::memory_order_acquire)) {
+			abortRequested.store(true, std::memory_order_release);
+		} else if (tickingWanted.load(std::memory_order_acquire)) {
+			/* Ticking but nothing captured yet, so there is nothing for
+			 * the graphics thread to hand back - stop it here. */
+			tickingWanted.store(false, std::memory_order_release);
+			ensureTicking(false);
+			resetState();
+		}
+	}
+
+	blog(LOG_INFO, "[MotionCraft] Plugin %s", on ? "ENABLED" : "DISABLED");
+
+	/* Deferred to the next turn of the event loop because this is normally
+	 * reached from inside the keyboard hook, and Windows drops a low-level
+	 * hook whose callback overruns LowLevelHooksTimeout. Rebuilding hooks and
+	 * repainting the dialog are both far too much to do in that window. The
+	 * hook callback runs on this thread, so a zero-delay timer lands as soon
+	 * as it returns. */
+	QTimer::singleShot(0, this, [this]() {
+		if (shuttingDown)
+			return;
+		uninstallHooks();
+		installHooks();
+		emit settingsChanged();
+	});
+}
+
+void MotionCraftController::togglePluginEnabled()
+{
+	/* Reached only from a hotkey, so it obeys the same focus policy as the
+	 * others. hotkeysEnabled is deliberately not checked: that switch governs
+	 * the zoom and follow keys, and being unable to turn the plugin back on
+	 * because its own key had been filed under them would be a trap. */
+	if (!hotkeyFocusAllows())
+		return;
+	setPluginEnabled(!pluginEnabled);
+}
+
 /* Wiggle's equivalent of requestLevel. It does not touch the zoom at all: it
  * only keeps the tick alive at rest, which is the one thing the zoom loop would
  * otherwise never do. Turning it off leaves the tick running until the zoom
@@ -1189,7 +1253,7 @@ void MotionCraftController::setWiggleEnabled(bool on)
 {
 	wiggleEnabled = on;
 
-	if (!on) {
+	if (!on || !pluginEnabled) {
 		wiggleRunning.store(false, std::memory_order_release);
 		return;
 	}
@@ -1273,6 +1337,7 @@ void MotionCraftController::resetState()
 	tickingWanted.store(false, std::memory_order_release);
 	pendingFinish.store(false, std::memory_order_release);
 	wiggleRunning.store(false, std::memory_order_release);
+	abortRequested.store(false, std::memory_order_release);
 	wigglePhase = 0.0;
 	wiggleSpeedCurrent = 0.0;
 	wiggleSpeedTarget = 0.0;
@@ -3281,6 +3346,18 @@ void MotionCraftController::videoTick(double seconds)
 	if (!zoomActive.load(std::memory_order_acquire) || shuttingDown)
 		return;
 
+	/* Disabled mid-flight: stop where we are and hand back for teardown,
+	 * rather than animating out. Same handshake as a zoom that finishes
+	 * normally, so the restore still happens on the main thread. */
+	if (abortRequested.exchange(false, std::memory_order_acq_rel)) {
+		segmentRunning.store(false, std::memory_order_relaxed);
+		currentZoom = 1.0;
+		currentZoomVel = 0.0;
+		zoomActive.store(false, std::memory_order_release);
+		pendingFinish.store(true, std::memory_order_release);
+		return;
+	}
+
 	/* OBS hands us the true frame delta. Clamp only to survive a stalled
 	 * frame, not to impose a rate of our own. */
 	tickDeltaSeconds = clampd(seconds, 1.0 / 480.0, 1.0 / 20.0);
@@ -3483,6 +3560,16 @@ LRESULT CALLBACK MotionCraftController::kb_hook_proc(int nCode, WPARAM wParam, L
 
 		const int vk = (int)k->vkCode;
 
+		const auto &master = g_ctl->pluginToggle;
+		if (down && master.valid && vk_matches(vk, master.vk) &&
+		    mods_current(master.modCtrl, master.modAlt, master.modShift, master.modWin)) {
+			g_ctl->togglePluginEnabled();
+			return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
+		}
+
+		if (!g_ctl->pluginEnabled)
+			return CallNextHookEx((HHOOK)g_ctl->keyboardHook, nCode, wParam, lParam);
+
 		if (g_ctl->hotkeysEnabled && g_ctl->followToggleHkValid && down && g_ctl->followToggleHotkeyVk != 0 &&
 		    vk_matches(vk, g_ctl->followToggleHotkeyVk) &&
 		    mods_current(g_ctl->followToggleModCtrl, g_ctl->followToggleModAlt, g_ctl->followToggleModShift,
@@ -3554,16 +3641,23 @@ CGEventRef MotionCraftController::eventTapCallback(CGEventTapProxy proxy, CGEven
 		const int keycode = (int)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
 		const bool down = (type == kCGEventKeyDown);
 
+		const auto &master = ctl->pluginToggle;
+		const bool masterPressed = down && master.valid && vk_matches(keycode, master.vk) &&
+					   mods_current(master.modCtrl, master.modAlt, master.modShift, master.modWin);
+		if (masterPressed)
+			ctl->togglePluginEnabled();
+
 		/* The macOS event tap is shared with the cursor-halo mouse path, so it
 		 * stays installed even with hotkeys off; the gate has to be here. */
-		if (ctl->hotkeysEnabled && ctl->followToggleHkValid && down && ctl->followToggleHotkeyVk != 0 &&
+		if (!masterPressed && ctl->pluginEnabled && ctl->hotkeysEnabled && ctl->followToggleHkValid && down &&
+		    ctl->followToggleHotkeyVk != 0 &&
 		    vk_matches(keycode, ctl->followToggleHotkeyVk) &&
 		    mods_current(ctl->followToggleModCtrl, ctl->followToggleModAlt, ctl->followToggleModShift,
 				 ctl->followToggleModWin)) {
 			ctl->toggleFollowMouseRuntime();
 		}
 
-		if (down) {
+		if (down && !masterPressed && ctl->pluginEnabled) {
 			for (int i = 0; i < MotionCraftController::kZoomLevelCount; i++) {
 				const auto &lv = ctl->zoomLevels[i];
 				if (!lv.valid || lv.vk == 0 || !vk_matches(keycode, lv.vk))
@@ -3627,16 +3721,23 @@ void MotionCraftController::processXInput2Events()
 			KeySym sym = XkbKeycodeToKeysym(xiDisplay, keycode, 0, 0);
 			const bool down = (evtype == XI_RawKeyPress);
 
+			const bool masterPressed =
+				down && pluginToggle.valid && vk_matches((int)sym, pluginToggle.vk) &&
+				mods_current(pluginToggle.modCtrl, pluginToggle.modAlt, pluginToggle.modShift,
+					     pluginToggle.modWin);
+			if (masterPressed)
+				togglePluginEnabled();
+
 			/* Same as macOS: one XInput2 connection serves both the keys and
 			 * the cursor halo, so it can outlive the hotkeys being disabled. */
-			if (hotkeysEnabled && followToggleHkValid && down && followToggleHotkeyVk != 0 &&
-			    vk_matches((int)sym, followToggleHotkeyVk) &&
+			if (!masterPressed && pluginEnabled && hotkeysEnabled && followToggleHkValid && down &&
+			    followToggleHotkeyVk != 0 && vk_matches((int)sym, followToggleHotkeyVk) &&
 			    mods_current(followToggleModCtrl, followToggleModAlt, followToggleModShift,
 					 followToggleModWin)) {
 				toggleFollowMouseRuntime();
 			}
 
-			if (down) {
+			if (down && !masterPressed && pluginEnabled) {
 				for (int i = 0; i < kZoomLevelCount; i++) {
 					const ZoomLevel &lv = zoomLevels[i];
 					if (!lv.valid || lv.vk == 0 || !vk_matches((int)sym, lv.vk))
@@ -3663,7 +3764,7 @@ void MotionCraftController::processXInput2Events()
 void MotionCraftController::toggleFollowMouseRuntime()
 {
 	/* Only ever reached from a hotkey, so it obeys the same focus policy. */
-	if (!hotkeysEnabled || !hotkeyFocusAllows())
+	if (!pluginEnabled || !hotkeysEnabled || !hotkeyFocusAllows())
 		return;
 
 	followMouseRuntimeEnabled = !followMouseRuntimeEnabled;
@@ -3940,16 +4041,15 @@ static int qtKeyToVk(int qtKey)
 /* Level keys accept an optional modifier combination but must carry a real key:
  * a bare Shift or Ctrl is far too easy to fire by accident when five of them
  * are bound at once, so it is rejected rather than treated as a trigger. */
-static void parse_level_hotkey(MotionCraftController::ZoomLevel &lv)
+/* Resolve a stored key sequence into what the hooks compare against. A bare
+ * modifier is rejected: a trigger that fires on Ctrl alone would go off
+ * constantly. The Follow Mouse toggle deliberately allows one and parses its
+ * own sequence below, which is the only reason that code is not this code. */
+static void parse_key_trigger(const QString &sequence, MotionCraftController::KeyTrigger &out)
 {
-	lv.vk = 0;
-	lv.valid = false;
-	lv.modCtrl = false;
-	lv.modAlt = false;
-	lv.modShift = false;
-	lv.modWin = false;
+	out = MotionCraftController::KeyTrigger{};
 
-	QKeySequence seq(lv.hotkey);
+	QKeySequence seq(sequence);
 	if (seq.isEmpty())
 		return;
 
@@ -3967,18 +4067,32 @@ static void parse_level_hotkey(MotionCraftController::ZoomLevel &lv)
 	}
 
 	const auto mods = kc.keyboardModifiers();
-	lv.vk = qtKeyToVk(key);
-	lv.modCtrl = mods.testFlag(Qt::ControlModifier);
-	lv.modAlt = mods.testFlag(Qt::AltModifier);
-	lv.modShift = mods.testFlag(Qt::ShiftModifier);
-	lv.modWin = mods.testFlag(Qt::MetaModifier);
-	lv.valid = (lv.vk != 0);
+	out.vk = qtKeyToVk(key);
+	out.modCtrl = mods.testFlag(Qt::ControlModifier);
+	out.modAlt = mods.testFlag(Qt::AltModifier);
+	out.modShift = mods.testFlag(Qt::ShiftModifier);
+	out.modWin = mods.testFlag(Qt::MetaModifier);
+	out.valid = (out.vk != 0);
+}
+
+static void parse_level_hotkey(MotionCraftController::ZoomLevel &lv)
+{
+	MotionCraftController::KeyTrigger t;
+	parse_key_trigger(lv.hotkey, t);
+	lv.vk = t.vk;
+	lv.valid = t.valid;
+	lv.modCtrl = t.modCtrl;
+	lv.modAlt = t.modAlt;
+	lv.modShift = t.modShift;
+	lv.modWin = t.modWin;
 }
 
 void MotionCraftController::rebuildTriggersFromSettings()
 {
 	for (ZoomLevel &lv : zoomLevels)
 		parse_level_hotkey(lv);
+
+	parse_key_trigger(pluginToggleHotkeySequence, pluginToggle);
 
 	followToggleHkValid = false;
 	followToggleHotkeyVk = 0;
@@ -4106,14 +4220,18 @@ bool MotionCraftController::anyLevelHotkeyValid() const
 
 bool MotionCraftController::needsKeyboardHook() const
 {
-	return hotkeysEnabled && (anyLevelHotkeyValid() || followToggleHkValid);
+	/* The toggle key has to stay heard even with the plugin off - it is the
+	 * only way back on. Everything else is silenced. */
+	if (pluginToggle.valid)
+		return true;
+	return pluginEnabled && hotkeysEnabled && (anyLevelHotkeyValid() || followToggleHkValid);
 }
 
 bool MotionCraftController::needsMouseHook() const
 {
 	/* The mouse hook only exists for the cursor halo now that no trigger can
 	 * be bound to a mouse button. */
-	return showCursorMarker;
+	return pluginEnabled && showCursorMarker;
 }
 
 void MotionCraftController::installHooks()

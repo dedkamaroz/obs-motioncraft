@@ -27,6 +27,10 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 - **No exposed background** — sources are automatically enlarged by exactly what the drift costs, and the drift gives way at a canvas edge rather than pulling the background into view. You do not have to pre-scale anything.
 - **Rides on the zoom** — the wiggle runs whether or not the scene is zoomed, and both apply at once.
 
+### Everything Off
+
+- **One key disables the plugin entirely** — any zoom and wiggle unwind, every source goes back exactly as it was, and MotionCraft stops listening for anything except that key. Press it again to bring it back.
+
 Wiggle ranges are deliberately narrow — position 0–5 px, rotation 0–1°, scale 0–2 %, speed 0–5× — because this is meant to be felt rather than seen.
 
 ---
@@ -37,9 +41,12 @@ Wiggle ranges are deliberately narrow — position 0–5 px, rotation 0–1°, s
 2. Under **Sources**, tick the sources the camera should carry. Anything left unticked stays put — a webcam overlay or a watermark, say.
 3. Under **Zoom Levels**, set a zoom factor and a hotkey for each level you want.
 4. Under **Wiggle**, set the amounts and tick **Enable wiggle**.
-5. **Apply.**
+5. Optionally set an **Enable / Disable Hotkey** on the **Target** tab, for switching the whole plugin off mid-stream.
+6. **Apply.**
 
 The wiggle starts as soon as you apply it and stays on until you untick it. If it was running when you closed OBS, it resumes once your scenes have loaded.
+
+The enable/disable state itself is runtime only — OBS always starts with MotionCraft enabled, so a plugin switched off during one session never looks broken in the next. The key binding is remembered.
 
 ---
 
@@ -97,6 +104,7 @@ The geometry is checked offline, without OBS, so the maths can be verified witho
 
 ```bash
 cl /EHsc /O2 tests\wiggle-test.cpp && wiggle-test.exe
+cl /EHsc /O2 tests\plugin-toggle-test.cpp && plugin-toggle-test.exe
 cl /EHsc /O2 tests\framing-clamp-test.cpp && framing-clamp-test.exe
 cl /EHsc /O2 tests\zoom-geometry-test.cpp && zoom-geometry-test.exe
 cl /EHsc /O2 tests\zoom-level-timing-test.cpp && zoom-level-timing-test.exe
