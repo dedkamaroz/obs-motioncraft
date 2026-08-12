@@ -612,6 +612,20 @@ void MotionCraftController::shutdown()
 	}
 	if (staleRef)
 		obs_source_release(staleRef);
+
+	/* Safe here and not before: obs_remove_tick_callback above has already
+	 * waited out any in-flight tick, so nothing else can be reading these. */
+	releaseSceneItems();
+
+	if (markerFilter) {
+		obs_source_release(markerFilter);
+		markerFilter = nullptr;
+	}
+	if (markerSource) {
+		obs_source_release(markerSource);
+		markerSource = nullptr;
+	}
+
 	if (dialog)
 		dialog->close();
 }
@@ -1375,7 +1389,7 @@ void MotionCraftController::resetState()
 	lastTickMs = 0;
 	lastTransformApplyMs = 0;
 	lastFollowAnchorValid = false;
-	sceneItems.clear();
+	releaseSceneItems();
 	sceneContentBoundsValid = false;
 	sceneContentMin = {};
 	sceneContentMax = {};
@@ -2902,12 +2916,28 @@ void MotionCraftController::captureOriginal(obs_sceneitem_t *item)
 	SceneItemState state{};
 	state.item = item;
 	state.orig = orig;
+	/* Held for as long as the pointer is stored. Deleting a source while the
+	 * zoom or wiggle is running destroys its scene item, and the restore at
+	 * the end writes to every item it captured - which was a write to freed
+	 * memory. A reference makes the pointer outlive the scene's own, so the
+	 * restore always has something valid to write to; if the item has been
+	 * taken out of its scene by then, writing to it is simply a no-op. */
+	obs_sceneitem_addref(item);
 	sceneItems.push_back(state);
+}
+
+void MotionCraftController::releaseSceneItems()
+{
+	for (auto &state : sceneItems) {
+		if (state.item)
+			obs_sceneitem_release(state.item);
+	}
+	sceneItems.clear();
 }
 
 void MotionCraftController::captureOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
 {
-	sceneItems.clear();
+	releaseSceneItems();
 	sceneContentBoundsValid = false;
 	wiggleSafety = wiggleSafetyScale();
 	for (auto *item : items)
@@ -2980,24 +3010,6 @@ void MotionCraftController::captureOriginalSceneItems(const std::vector<obs_scen
 			sceneContentMax.y = std::max(sceneContentMax.y, maxY);
 		}
 	}
-}
-
-void MotionCraftController::restoreOriginal(obs_sceneitem_t *item)
-{
-	if (!item)
-		return;
-	for (const auto &state : sceneItems) {
-		if (state.item != item || !state.orig.valid)
-			continue;
-		applySceneItemTransform(item, state.orig);
-		return;
-	}
-}
-
-void MotionCraftController::restoreOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items)
-{
-	for (auto *item : items)
-		restoreOriginal(item);
 }
 
 void MotionCraftController::restoreOriginalSceneItemsFromState()

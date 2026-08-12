@@ -111,6 +111,7 @@ cl /EHsc /O2 tests\preview-mapping-test.cpp && preview-mapping-test.exe
 cl /EHsc /O2 testsollow-range-test.cpp && follow-range-test.exe
 cl /EHsc /O2 tests\hotkey-matching-test.cpp && hotkey-matching-test.exe
 cl /EHsc /O2 tests\dialog-lifetime-test.cpp && dialog-lifetime-test.exe
+cl /EHsc /O2 tests\scene-item-lifetime-test.cpp && scene-item-lifetime-test.exe
 cl /EHsc /O2 tests\framing-clamp-test.cpp && framing-clamp-test.exe
 cl /EHsc /O2 tests\zoom-geometry-test.cpp && zoom-geometry-test.exe
 cl /EHsc /O2 tests\zoom-level-timing-test.cpp && zoom-level-timing-test.exe

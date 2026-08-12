@@ -256,10 +256,12 @@ private slots:
 private:
 
 	void captureOriginal(obs_sceneitem_t *item);
-	void restoreOriginal(obs_sceneitem_t *item);
 	void captureOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items);
-	void restoreOriginalSceneItems(const std::vector<obs_sceneitem_t *> &items);
 	void restoreOriginalSceneItemsFromState();
+
+	/* Drops the reference taken for every captured item and empties the list.
+	 * The only way sceneItems may be cleared. */
+	void releaseSceneItems();
 	QString markerImagePath() const;
 	void ensureMarkerSource();
 	obs_sceneitem_t *ensureMarkerItem(obs_scene_t *scene);
