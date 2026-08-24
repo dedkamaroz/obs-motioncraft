@@ -707,7 +707,7 @@ void MotionCraftController::loadSettings()
 	wiggleRotation = {0.15, 0.3, 0.5};
 	wiggleScale = {0.25, 0.5, 0.75};
 	wiggleSpeed = {1.0, 1.5, 2.0};
-	wiggleSmoothing = {kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec};
+	wiggleSmoothing = {kWiggleSmoothingDefaultUnits, kWiggleSmoothingDefaultUnits, kWiggleSmoothingDefaultUnits};
 	wiggleSeed = 1234;
 
 	const QString p = configPath();
@@ -927,7 +927,7 @@ void MotionCraftController::loadSettings()
 	loadRange("rotation", wiggleRotation);
 	loadRange("scale", wiggleScale);
 	loadRange("speed", wiggleSpeed);
-	loadRange("smoothing", wiggleSmoothing);
+	loadRange("smoothing_units", wiggleSmoothing);
 
 	if (obs_data_has_user_value(data, "wiggle_seed"))
 		wiggleSeed = (int)obs_data_get_int(data, "wiggle_seed");
@@ -1028,7 +1028,7 @@ void MotionCraftController::saveSettings()
 	saveRange("rotation", wiggleRangeFor(kWiggleRotParam));
 	saveRange("scale", wiggleRangeFor(kWiggleScaleParam));
 	saveRange("speed", wiggleRangeFor(kWiggleSpeedParam));
-	saveRange("smoothing", wiggleRangeFor(kWiggleSmoothParam));
+	saveRange("smoothing_units", wiggleRangeFor(kWiggleSmoothParam));
 	obs_data_set_int(data, "wiggle_seed", wiggleSeed);
 
 	obs_data_set_bool(data, "recovery_active", recoveryActive);
@@ -1079,6 +1079,14 @@ void MotionCraftController::ensureTicking(bool on)
 	}
 }
 
+/* Dial position to time constant: 0 -> 0s, 50 -> 0.08s, 100 -> 0.20s, with the
+ * curve packing half the steps into the range below 0.08s. */
+double MotionCraftController::wiggleSmoothingSeconds(double units)
+{
+	const double u = clampd(units, 0.0, kWiggleSmoothingUnitMax) / kWiggleSmoothingUnitMax;
+	return kWiggleSmoothingMaxSec * std::pow(u, kWiggleSmoothingCurve);
+}
+
 MotionCraftController::WiggleRange MotionCraftController::wiggleRangeFor(int param) const
 {
 	WiggleRange r{0.0, 0.0, 0.0};
@@ -1104,8 +1112,7 @@ MotionCraftController::WiggleRange MotionCraftController::wiggleRangeFor(int par
 		break;
 	default:
 		r = wiggleSmoothing;
-		lo = kWiggleSmoothingMinSec;
-		hi = kWiggleSmoothingMaxSec;
+		hi = kWiggleSmoothingUnitMax;
 		break;
 	}
 
@@ -1192,9 +1199,10 @@ void MotionCraftController::updateWiggleParams(double seconds)
 	}
 
 	/* Smoothing eases onto its own new value with whatever it currently is, so
-	 * a change to it arrives at the pace it is itself asking for. */
-	const double tau = clampd(wiggleDrift[kWiggleSmoothParam].current, kWiggleSmoothingMinSec,
-				  kWiggleSmoothingMaxSec);
+	 * a change to it arrives at the pace it is itself asking for. The floor is
+	 * what makes a dial of zero mean "no ease": the exponential then underflows
+	 * to a blend of exactly 1, which is the value snapping straight on. */
+	const double tau = std::max(1.0e-6, wiggleSmoothingSeconds(wiggleDrift[kWiggleSmoothParam].current));
 	const double blend = 1.0 - std::exp(-seconds / tau);
 
 	for (int i = 0; i < kWiggleParamCount; i++) {

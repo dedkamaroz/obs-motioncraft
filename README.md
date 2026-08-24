@@ -35,7 +35,7 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 - **Off until you switch it on** — MotionCraft starts disabled every time OBS launches. Nothing is captured, no transform is touched and no keyboard hook is installed until you say so.
 - **One switch, or one key** — the checkbox on the Target tab takes effect immediately, and an optional hotkey does the same from anywhere. Switching off unwinds any zoom and wiggle and puts every source back exactly as it was; switching on restores whatever you had configured, wiggle included.
 
-Wiggle limits are position 0-20 px, rotation 0-15°, scale 0-5 %, speed 0-20× and smoothing 0.01-1.00 s. The defaults sit near the bottom of each: this is meant to be felt rather than seen, and anything larger is paid for with a bigger safety enlargement.
+Wiggle limits are position 0-20 px, rotation 0-15°, scale 0-5 % and speed 0-20×. The defaults sit near the bottom of each: this is meant to be felt rather than seen, and anything larger is paid for with a bigger safety enlargement. Smoothing is a dial of 0-100 rather than a duration - 0 snaps, 50 is the 0.08 s ease the wiggle has always had, 100 is 0.20 s - curved so half the dial covers everything below 0.08 s, where a hundredth of a second still changes the feel.
 
 ---
 

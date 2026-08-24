@@ -160,11 +160,24 @@ public:
 	static constexpr double kWiggleSpeedMax = 20.0;
 
 	/* Smoothing is the time constant of the ease onto every freshly drawn
-	 * value. The default is what the speed glide was fixed at before it became
-	 * a setting, so a first run behaves exactly as it always did. */
-	static constexpr double kWiggleSmoothingMinSec = 0.01;
-	static constexpr double kWiggleSmoothingMaxSec = 1.0;
-	static constexpr double kWiggleSmoothingDefaultSec = 0.08;
+	 * value, and is the one parameter set on a dial rather than in its own
+	 * unit: 0 is no ease at all, 50 is the 0.08s the glide was fixed at before
+	 * it became a setting, 100 is 0.20s and about as slack as this is worth.
+	 *
+	 * The dial is a power curve rather than a straight line, so half of its
+	 * hundred steps are spent below 0.08s. That is where they are worth
+	 * something: a hundredth of a second is the difference between eager and
+	 * lazy down there, and nothing at all up near the top. */
+	static constexpr double kWiggleSmoothingUnitMax = 100.0;
+	static constexpr double kWiggleSmoothingMaxSec = 0.20;
+	static constexpr double kWiggleSmoothingDefaultUnits = 50.0;
+
+	/* log(0.4)/log(0.5): the exponent that puts the midpoint of the dial on
+	 * 0.08s given a top end of 0.20s. */
+	static constexpr double kWiggleSmoothingCurve = 1.3219281;
+
+	/* Dial position to seconds. */
+	static double wiggleSmoothingSeconds(double units);
 
 	/* How often every parameter is redrawn. Short enough to read as a hand
 	 * that keeps changing its mind, long enough that the ease has settled for
@@ -186,8 +199,8 @@ public:
 	WiggleRange wiggleRotation{0.15, 0.3, 0.5};
 	WiggleRange wiggleScale{0.25, 0.5, 0.75};
 	WiggleRange wiggleSpeed{1.0, 1.5, 2.0};
-	WiggleRange wiggleSmoothing{kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec,
-				    kWiggleSmoothingDefaultSec};
+	WiggleRange wiggleSmoothing{kWiggleSmoothingDefaultUnits, kWiggleSmoothingDefaultUnits,
+				    kWiggleSmoothingDefaultUnits};
 	int wiggleSeed = 1234;
 
 	/* The order the drifting values are kept in, and the only way a range is

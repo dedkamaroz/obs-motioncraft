@@ -532,7 +532,7 @@ void MotionCraftDialog::buildWiggleTab()
 
 	int row = 1;
 	auto addParam = [&](int param, const QString &label, const QString &tip, double lo, double hi, double step,
-			    const QString &suffix) {
+			    int decimals, const QString &suffix) {
 		auto *name = new QLabel(label, page);
 		name->setToolTip(tip);
 		grid->addWidget(name, row, 0);
@@ -541,7 +541,7 @@ void MotionCraftDialog::buildWiggleTab()
 			auto *sp = new QDoubleSpinBox(page);
 			sp->setRange(lo, hi);
 			sp->setSingleStep(step);
-			sp->setDecimals(2);
+			sp->setDecimals(decimals);
 			sp->setSuffix(suffix);
 			sp->setToolTip(tip);
 			spWiggleRange[param][col] = sp;
@@ -582,16 +582,18 @@ void MotionCraftDialog::buildWiggleTab()
 	};
 
 	addParam(MotionCraftController::kWigglePosParam, T("Dialog.Wiggle.Position"), T("Dialog.Wiggle.PositionTooltip"),
-		 0.0, MotionCraftController::kWigglePositionMaxPx, 0.1, T("Unit.Pixels"));
+		 0.0, MotionCraftController::kWigglePositionMaxPx, 0.1, 2, T("Unit.Pixels"));
 	addParam(MotionCraftController::kWiggleRotParam, T("Dialog.Wiggle.Rotation"), T("Dialog.Wiggle.RotationTooltip"),
-		 0.0, MotionCraftController::kWiggleRotationMaxDeg, 0.05, T("Unit.Degrees"));
+		 0.0, MotionCraftController::kWiggleRotationMaxDeg, 0.05, 2, T("Unit.Degrees"));
 	addParam(MotionCraftController::kWiggleScaleParam, T("Dialog.Wiggle.Scale"), T("Dialog.Wiggle.ScaleTooltip"),
-		 0.0, MotionCraftController::kWiggleScaleMaxPct, 0.1, T("Unit.Percent"));
+		 0.0, MotionCraftController::kWiggleScaleMaxPct, 0.1, 2, T("Unit.Percent"));
 	addParam(MotionCraftController::kWiggleSpeedParam, T("Dialog.Wiggle.Speed"), T("Dialog.Wiggle.SpeedTooltip"),
-		 0.0, MotionCraftController::kWiggleSpeedMax, 0.1, T("Unit.Times"));
+		 0.0, MotionCraftController::kWiggleSpeedMax, 0.1, 2, T("Unit.Times"));
+	/* A dial, not a duration: whole numbers, no unit, and the midpoint of it
+	 * is the ease the wiggle has always had. */
 	addParam(MotionCraftController::kWiggleSmoothParam, T("Dialog.Wiggle.Smoothing"),
-		 T("Dialog.Wiggle.SmoothingTooltip"), MotionCraftController::kWiggleSmoothingMinSec,
-		 MotionCraftController::kWiggleSmoothingMaxSec, 0.01, T("Unit.Seconds"));
+		 T("Dialog.Wiggle.SmoothingTooltip"), 0.0, MotionCraftController::kWiggleSmoothingUnitMax, 1.0, 0,
+		 QString());
 
 	lay->addLayout(grid);
 
