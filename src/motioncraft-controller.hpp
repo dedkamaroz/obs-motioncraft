@@ -154,26 +154,60 @@ public:
 	 * deliberately narrow - this is meant to read as a camera operator
 	 * breathing, not as a shake effect, and anything larger has to be paid
 	 * for with a bigger safety scale (see wiggleSafetyScale). */
-	static constexpr double kWigglePositionMaxPx = 5.0;
-	static constexpr double kWiggleRotationMaxDeg = 1.0;
-	static constexpr double kWiggleScaleMaxPct = 2.0;
-	static constexpr double kWiggleSpeedMax = 5.0;
+	static constexpr double kWigglePositionMaxPx = 20.0;
+	static constexpr double kWiggleRotationMaxDeg = 15.0;
+	static constexpr double kWiggleScaleMaxPct = 5.0;
+	static constexpr double kWiggleSpeedMax = 20.0;
 
-	/* How often a new speed is drawn from [min, max], and the time constant of
-	 * the glide onto it. The glide is short enough that the speed is settled
-	 * for most of each window but never steps discontinuously. */
-	static constexpr double kWiggleSpeedSampleSec = 0.5;
-	static constexpr double kWiggleSpeedGlideSec = 0.08;
+	/* Smoothing is the time constant of the ease onto every freshly drawn
+	 * value. The default is what the speed glide was fixed at before it became
+	 * a setting, so a first run behaves exactly as it always did. */
+	static constexpr double kWiggleSmoothingMinSec = 0.01;
+	static constexpr double kWiggleSmoothingMaxSec = 1.0;
+	static constexpr double kWiggleSmoothingDefaultSec = 0.08;
+
+	/* How often every parameter is redrawn. Short enough to read as a hand
+	 * that keeps changing its mind, long enough that the ease has settled for
+	 * most of each window. */
+	static constexpr double kWiggleSampleSec = 0.5;
+
+	/* A wiggle parameter is a range with a midpoint rather than one number: a
+	 * fresh value is drawn every kWiggleSampleSec from a bell curve centred on
+	 * mid, clamped into [min, max], and eased onto over the smoothing time.
+	 * min equal to max is the old fixed-value behaviour, exactly. */
+	struct WiggleRange {
+		double min;
+		double mid;
+		double max;
+	};
 
 	bool wiggleEnabled = false;
-	double wigglePositionPx = 2.0;
-	double wiggleRotationDeg = 0.3;
-	double wiggleScalePct = 0.5;
-	double wiggleSpeedMin = 1.0;
-	double wiggleSpeedMax = 2.0;
+	WiggleRange wigglePosition{1.0, 2.0, 3.0};
+	WiggleRange wiggleRotation{0.15, 0.3, 0.5};
+	WiggleRange wiggleScale{0.25, 0.5, 0.75};
+	WiggleRange wiggleSpeed{1.0, 1.5, 2.0};
+	WiggleRange wiggleSmoothing{kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec,
+				    kWiggleSmoothingDefaultSec};
 	int wiggleSeed = 1234;
 
+	/* The order the drifting values are kept in, and the only way a range is
+	 * addressed: everything reads a range through wiggleRangeFor(), which is
+	 * where an inverted or out-of-bounds one is made sane. */
+	enum WiggleParamIndex {
+		kWigglePosParam = 0,
+		kWiggleRotParam,
+		kWiggleScaleParam,
+		kWiggleSpeedParam,
+		kWiggleSmoothParam,
+		kWiggleParamCount
+	};
+
 	void setWiggleEnabled(bool on);
+
+	/* The only way a range is read: spin boxes and settings files can both
+	 * hand over an inverted or out-of-bounds one, and everything downstream -
+	 * the dialog included - has to see the same sane version of it. */
+	WiggleRange wiggleRangeFor(int param) const;
 
 	QSet<QString> includedSources;
 
@@ -217,7 +251,7 @@ private:
 	 * scale on. */
 	bool wiggleShaping() const;
 	double wiggleSafetyScale() const;
-	void updateWiggleSpeed(double seconds);
+	void updateWiggleParams(double seconds);
 
 	bool getSelectedScreenRect(int &x, int &y, int &w, int &h) const;
 	void enumerateTargetItemsInCurrentScene(std::vector<obs_sceneitem_t *> &items) const;
@@ -363,10 +397,16 @@ private:
 	 * clock times speed, so a speed change bends the motion instead of
 	 * teleporting it. */
 	double wigglePhase = 0.0;
-	double wiggleSpeedCurrent = 0.0;
-	double wiggleSpeedTarget = 0.0;
-	double wiggleSpeedTimer = 0.0;
-	uint32_t wiggleSpeedRng = 0;
+
+	/* One drawn-and-eased value per parameter, each with its own noise stream
+	 * so widening one range cannot change what another one does. */
+	struct WiggleDrift {
+		double current = 0.0;
+		double target = 0.0;
+		uint32_t rng = 0;
+	};
+	WiggleDrift wiggleDrift[kWiggleParamCount];
+	double wiggleSampleTimer = 0.0;
 
 	/* Computed once per capture: how much every item has to be enlarged so the
 	 * drift cannot pull the canvas background into view. */

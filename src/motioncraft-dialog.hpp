@@ -1,5 +1,7 @@
 #pragma once
 
+#include "motioncraft-controller.hpp"
+
 #include <QDialog>
 
 class QCheckBox;
@@ -87,11 +89,9 @@ private:
 	QCheckBox *chkDebug = nullptr;
 
 	QCheckBox *chkWiggleEnabled = nullptr;
-	QDoubleSpinBox *spWigglePosition = nullptr;
-	QDoubleSpinBox *spWiggleRotation = nullptr;
-	QDoubleSpinBox *spWiggleScale = nullptr;
-	QDoubleSpinBox *spWiggleSpeedMin = nullptr;
-	QDoubleSpinBox *spWiggleSpeedMax = nullptr;
+	/* One row per wiggle parameter, three boxes each: min, midpoint, max. */
+	enum { kRangeMin = 0, kRangeMid, kRangeMax, kRangeCols };
+	QDoubleSpinBox *spWiggleRange[MotionCraftController::kWiggleParamCount][kRangeCols] = {};
 	QSpinBox *spWiggleSeed = nullptr;
 
 	QListWidget *lstSources = nullptr;

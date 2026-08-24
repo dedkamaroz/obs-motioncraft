@@ -26,7 +26,7 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 
 - **Handheld camera drift** — position, roll and a slow breathe in and out, from smooth value noise rather than per-frame randomness, so it reads as a hand holding a camera rather than as a vibration.
 - **Moves as one camera** — every ticked source is panned, rolled and breathed by the same amount about the same point, so a composed scene stays composed.
-- **Speed jitter** — set a min and a max and the speed is redrawn from that range twice a second and eased onto, which gives the motion the hesitation and hurry of a real hand. Set them equal for a steady drift.
+- **Everything jitters** - position, rotation, scale, speed and the smoothing itself each take a min, a midpoint and a max. Twice a second a fresh value is drawn for each from a bell curve centred on its midpoint, kept inside its range, and eased onto over the smoothing time, which gives the motion the hesitation and hurry of a real hand. Set a min and max equal to hold that parameter steady.
 - **No exposed background** — sources are automatically enlarged by exactly what the drift costs, and the drift gives way at a canvas edge rather than pulling the background into view. You do not have to pre-scale anything.
 - **Rides on the zoom** — the wiggle runs whether or not the scene is zoomed, and both apply at once.
 
@@ -35,7 +35,7 @@ MotionCraft is a fork of [Zoominator](https://github.com/mmlTools/zoominator) by
 - **Off until you switch it on** — MotionCraft starts disabled every time OBS launches. Nothing is captured, no transform is touched and no keyboard hook is installed until you say so.
 - **One switch, or one key** — the checkbox on the Target tab takes effect immediately, and an optional hotkey does the same from anywhere. Switching off unwinds any zoom and wiggle and puts every source back exactly as it was; switching on restores whatever you had configured, wiggle included.
 
-Wiggle ranges are deliberately narrow — position 0–5 px, rotation 0–1°, scale 0–2 %, speed 0–5× — because this is meant to be felt rather than seen.
+Wiggle limits are position 0-20 px, rotation 0-15°, scale 0-5 %, speed 0-20× and smoothing 0.01-1.00 s. The defaults sit near the bottom of each: this is meant to be felt rather than seen, and anything larger is paid for with a bigger safety enlargement.
 
 ---
 

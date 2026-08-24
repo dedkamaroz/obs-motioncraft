@@ -19,6 +19,7 @@
 #include <QPen>
 
 #include <cmath>
+#include <cstdio>
 #include <algorithm>
 
 #include <QFileInfo>
@@ -163,6 +164,29 @@ static inline double wiggle_noise(double t, uint32_t seed)
 	const double v0 = sample(i);
 	const double v1 = sample(i + 1u);
 	return v0 + (v1 - v0) * smoothstep(frac);
+}
+
+/* One draw for a wiggle parameter: a normal deviate about mid, clamped into
+ * [lo, hi]. Box-Muller off the same hash the noise uses, so a seed still fixes
+ * the whole motion.
+ *
+ * Sigma is a quarter of the range, which puts about 95% of draws inside it on
+ * their own - the clamp is a backstop for the tail rather than the thing
+ * shaping the distribution, so the values pile up around the midpoint instead
+ * of spreading evenly the way a uniform draw would. A midpoint set off-centre
+ * keeps that shape and simply crowds the near end. */
+static double wiggle_gaussian(uint32_t &rng, double lo, double hi, double mid)
+{
+	if (hi - lo <= 1e-9)
+		return lo;
+
+	rng = wiggle_hash(rng + 0x9e3779b9u);
+	const double u1 = std::max(1.0e-9, (double)rng / 4294967296.0);
+	rng = wiggle_hash(rng + 0x9e3779b9u);
+	const double u2 = (double)rng / 4294967296.0;
+
+	const double g = std::sqrt(-2.0 * std::log(u1)) * std::cos(2.0 * 3.14159265358979323846 * u2);
+	return clampd(mid + g * (hi - lo) * 0.25, lo, hi);
 }
 
 /* Write-suppression threshold for scale. Position is in pixels, where the 0.01
@@ -679,11 +703,11 @@ void MotionCraftController::loadSettings()
 	debug = false;
 
 	wiggleEnabled = false;
-	wigglePositionPx = 2.0;
-	wiggleRotationDeg = 0.3;
-	wiggleScalePct = 0.5;
-	wiggleSpeedMin = 1.0;
-	wiggleSpeedMax = 2.0;
+	wigglePosition = {1.0, 2.0, 3.0};
+	wiggleRotation = {0.15, 0.3, 0.5};
+	wiggleScale = {0.25, 0.5, 0.75};
+	wiggleSpeed = {1.0, 1.5, 2.0};
+	wiggleSmoothing = {kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec, kWiggleSmoothingDefaultSec};
 	wiggleSeed = 1234;
 
 	const QString p = configPath();
@@ -872,26 +896,49 @@ void MotionCraftController::loadSettings()
 
 	if (obs_data_has_user_value(data, "wiggle_enabled"))
 		wiggleEnabled = obs_data_get_bool(data, "wiggle_enabled");
-	if (obs_data_has_user_value(data, "wiggle_position_px"))
-		wigglePositionPx = obs_data_get_double(data, "wiggle_position_px");
-	if (obs_data_has_user_value(data, "wiggle_rotation_deg"))
-		wiggleRotationDeg = obs_data_get_double(data, "wiggle_rotation_deg");
-	if (obs_data_has_user_value(data, "wiggle_scale_pct"))
-		wiggleScalePct = obs_data_get_double(data, "wiggle_scale_pct");
-	if (obs_data_has_user_value(data, "wiggle_speed_min"))
-		wiggleSpeedMin = obs_data_get_double(data, "wiggle_speed_min");
-	if (obs_data_has_user_value(data, "wiggle_speed_max"))
-		wiggleSpeedMax = obs_data_get_double(data, "wiggle_speed_max");
+
+	/* A settings file written before the ranges existed holds one number per
+	 * amplitude. Adopting it as a range of zero width keeps that install
+	 * looking exactly as it did; widening it is then the user's move, not one
+	 * made behind their back on upgrade. Speed already had a min and a max, so
+	 * only its midpoint has to be invented. */
+	auto adoptSingle = [data](const char *oldKey, const char *newKey, WiggleRange &r) {
+		if (!obs_data_has_user_value(data, oldKey) || obs_data_has_user_value(data, newKey))
+			return;
+		const double v = obs_data_get_double(data, oldKey);
+		r = {v, v, v};
+	};
+	adoptSingle("wiggle_position_px", "wiggle_position_min", wigglePosition);
+	adoptSingle("wiggle_rotation_deg", "wiggle_rotation_min", wiggleRotation);
+	adoptSingle("wiggle_scale_pct", "wiggle_scale_min", wiggleScale);
+
+	auto loadRange = [data](const char *stem, WiggleRange &r) {
+		char key[64];
+		snprintf(key, sizeof key, "wiggle_%s_min", stem);
+		if (obs_data_has_user_value(data, key))
+			r.min = obs_data_get_double(data, key);
+		snprintf(key, sizeof key, "wiggle_%s_max", stem);
+		if (obs_data_has_user_value(data, key))
+			r.max = obs_data_get_double(data, key);
+		snprintf(key, sizeof key, "wiggle_%s_mid", stem);
+		r.mid = obs_data_has_user_value(data, key) ? obs_data_get_double(data, key) : (r.min + r.max) * 0.5;
+	};
+	loadRange("position", wigglePosition);
+	loadRange("rotation", wiggleRotation);
+	loadRange("scale", wiggleScale);
+	loadRange("speed", wiggleSpeed);
+	loadRange("smoothing", wiggleSmoothing);
+
 	if (obs_data_has_user_value(data, "wiggle_seed"))
 		wiggleSeed = (int)obs_data_get_int(data, "wiggle_seed");
 
-	wigglePositionPx = clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx);
-	wiggleRotationDeg = clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg);
-	wiggleScalePct = clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct);
-	wiggleSpeedMin = clampd(wiggleSpeedMin, 0.0, kWiggleSpeedMax);
-	wiggleSpeedMax = clampd(wiggleSpeedMax, 0.0, kWiggleSpeedMax);
-	if (wiggleSpeedMax < wiggleSpeedMin)
-		std::swap(wiggleSpeedMin, wiggleSpeedMax);
+	/* Ordering and bounds are wiggleRangeFor()'s job; writing them back here
+	 * as well is what stops a hand-edited file from surviving a round trip. */
+	wigglePosition = wiggleRangeFor(kWigglePosParam);
+	wiggleRotation = wiggleRangeFor(kWiggleRotParam);
+	wiggleScale = wiggleRangeFor(kWiggleScaleParam);
+	wiggleSpeed = wiggleRangeFor(kWiggleSpeedParam);
+	wiggleSmoothing = wiggleRangeFor(kWiggleSmoothParam);
 
 	includedSources.clear();
 	obs_data_array_t *incArr = obs_data_get_array(data, "included_sources");
@@ -968,11 +1015,20 @@ void MotionCraftController::saveSettings()
 	obs_data_set_bool(data, "debug", debug);
 
 	obs_data_set_bool(data, "wiggle_enabled", wiggleEnabled);
-	obs_data_set_double(data, "wiggle_position_px", wigglePositionPx);
-	obs_data_set_double(data, "wiggle_rotation_deg", wiggleRotationDeg);
-	obs_data_set_double(data, "wiggle_scale_pct", wiggleScalePct);
-	obs_data_set_double(data, "wiggle_speed_min", wiggleSpeedMin);
-	obs_data_set_double(data, "wiggle_speed_max", wiggleSpeedMax);
+	auto saveRange = [data](const char *stem, const WiggleRange &r) {
+		char key[64];
+		snprintf(key, sizeof key, "wiggle_%s_min", stem);
+		obs_data_set_double(data, key, r.min);
+		snprintf(key, sizeof key, "wiggle_%s_mid", stem);
+		obs_data_set_double(data, key, r.mid);
+		snprintf(key, sizeof key, "wiggle_%s_max", stem);
+		obs_data_set_double(data, key, r.max);
+	};
+	saveRange("position", wiggleRangeFor(kWigglePosParam));
+	saveRange("rotation", wiggleRangeFor(kWiggleRotParam));
+	saveRange("scale", wiggleRangeFor(kWiggleScaleParam));
+	saveRange("speed", wiggleRangeFor(kWiggleSpeedParam));
+	saveRange("smoothing", wiggleRangeFor(kWiggleSmoothParam));
 	obs_data_set_int(data, "wiggle_seed", wiggleSeed);
 
 	obs_data_set_bool(data, "recovery_active", recoveryActive);
@@ -1023,11 +1079,52 @@ void MotionCraftController::ensureTicking(bool on)
 	}
 }
 
+MotionCraftController::WiggleRange MotionCraftController::wiggleRangeFor(int param) const
+{
+	WiggleRange r{0.0, 0.0, 0.0};
+	double lo = 0.0;
+	double hi = 0.0;
+
+	switch (param) {
+	case kWigglePosParam:
+		r = wigglePosition;
+		hi = kWigglePositionMaxPx;
+		break;
+	case kWiggleRotParam:
+		r = wiggleRotation;
+		hi = kWiggleRotationMaxDeg;
+		break;
+	case kWiggleScaleParam:
+		r = wiggleScale;
+		hi = kWiggleScaleMaxPct;
+		break;
+	case kWiggleSpeedParam:
+		r = wiggleSpeed;
+		hi = kWiggleSpeedMax;
+		break;
+	default:
+		r = wiggleSmoothing;
+		lo = kWiggleSmoothingMinSec;
+		hi = kWiggleSmoothingMaxSec;
+		break;
+	}
+
+	r.min = clampd(r.min, lo, hi);
+	r.max = clampd(r.max, lo, hi);
+	if (r.max < r.min)
+		std::swap(r.min, r.max);
+	r.mid = clampd(r.mid, r.min, r.max);
+	return r;
+}
+
 bool MotionCraftController::wiggleShaping() const
 {
 	if (!wiggleRunning.load(std::memory_order_acquire))
 		return false;
-	return wigglePositionPx > 0.0 || wiggleRotationDeg > 0.0 || wiggleScalePct > 0.0;
+	/* The top of each range, not the value drifting inside it: an amplitude
+	 * that happens to be drawn near zero this second is still a wiggle. */
+	return wiggleRangeFor(kWigglePosParam).max > 0.0 || wiggleRangeFor(kWiggleRotParam).max > 0.0 ||
+	       wiggleRangeFor(kWiggleScaleParam).max > 0.0;
 }
 
 /* How much bigger every item has to be drawn so the drift cannot pull the
@@ -1059,48 +1156,66 @@ double MotionCraftController::wiggleSafetyScale() const
 	const double cw = haveVi && ovi.base_width > 0 ? (double)ovi.base_width : 1920.0;
 	const double ch = haveVi && ovi.base_height > 0 ? (double)ovi.base_height : 1080.0;
 
-	const double p = clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx);
+	/* Every term is the top of its range. The margin is sized once, when the
+	 * scene is captured, so it has to cover the worst the jitter can draw for
+	 * as long as it stands. */
+	const double p = wiggleRangeFor(kWigglePosParam).max;
 	const double posScale = std::max((cw + 2.0 * p) / cw, (ch + 2.0 * p) / ch);
 
-	const double th = clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg) * 3.14159265358979323846 / 180.0;
+	const double th = wiggleRangeFor(kWiggleRotParam).max * 3.14159265358979323846 / 180.0;
 	const double c = std::cos(th);
 	const double s = std::sin(th);
 	const double rotScale = std::max((cw * c + ch * s) / cw, (ch * c + cw * s) / ch);
 
-	const double sc = clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct) / 100.0;
+	const double sc = wiggleRangeFor(kWiggleScaleParam).max / 100.0;
 	const double scaleScale = 1.0 / std::max(0.01, 1.0 - sc);
 
 	return posScale * rotScale * scaleScale * 1.02;
 }
 
-/* Graphics thread only. Draws a fresh speed every kWiggleSpeedSampleSec and
- * glides onto it, which is what turns a steady drift into something that
- * hesitates and hurries the way a real hand does. Phase is integrated from the
- * result, never recomputed as elapsed * speed, so changing speed bends the
- * motion instead of jumping it. */
-void MotionCraftController::updateWiggleSpeed(double seconds)
+/* Graphics thread only. Every kWiggleSampleSec each parameter draws a fresh
+ * value from its own bell curve and eases onto it, which is what turns a steady
+ * drift into something that hesitates and hurries the way a real hand does.
+ * Amplitude, speed and the ease itself all move this way, so nothing about the
+ * motion is held at a constant the eye can lock onto.
+ *
+ * Phase is integrated from the result, never recomputed as elapsed * speed, so
+ * changing speed bends the motion instead of jumping it. */
+void MotionCraftController::updateWiggleParams(double seconds)
 {
-	const double lo = clampd(std::min(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
-	const double hi = clampd(std::max(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
-
-	if (hi - lo <= 1e-6) {
-		wiggleSpeedTarget = lo;
-		wiggleSpeedCurrent = lo;
-	} else {
-		wiggleSpeedTimer -= seconds;
-		if (wiggleSpeedTimer <= 0.0) {
-			wiggleSpeedTimer += kWiggleSpeedSampleSec;
-			if (wiggleSpeedTimer <= 0.0)
-				wiggleSpeedTimer = kWiggleSpeedSampleSec;
-			wiggleSpeedRng = wiggle_hash(wiggleSpeedRng + 0x9e3779b9u);
-			const double u = (double)wiggleSpeedRng / 4294967295.0;
-			wiggleSpeedTarget = lo + u * (hi - lo);
-		}
-		const double blend = 1.0 - std::exp(-seconds / kWiggleSpeedGlideSec);
-		wiggleSpeedCurrent += (wiggleSpeedTarget - wiggleSpeedCurrent) * blend;
+	wiggleSampleTimer -= seconds;
+	const bool redraw = wiggleSampleTimer <= 0.0;
+	if (redraw) {
+		wiggleSampleTimer += kWiggleSampleSec;
+		if (wiggleSampleTimer <= 0.0)
+			wiggleSampleTimer = kWiggleSampleSec;
 	}
 
-	wigglePhase += seconds * wiggleSpeedCurrent;
+	/* Smoothing eases onto its own new value with whatever it currently is, so
+	 * a change to it arrives at the pace it is itself asking for. */
+	const double tau = clampd(wiggleDrift[kWiggleSmoothParam].current, kWiggleSmoothingMinSec,
+				  kWiggleSmoothingMaxSec);
+	const double blend = 1.0 - std::exp(-seconds / tau);
+
+	for (int i = 0; i < kWiggleParamCount; i++) {
+		const WiggleRange r = wiggleRangeFor(i);
+		WiggleDrift &d = wiggleDrift[i];
+
+		/* An empty range is the no-jitter case, and has to be exactly steady
+		 * rather than eased towards - that is what makes min equal to max the
+		 * fixed-value behaviour it used to be. */
+		if (r.max - r.min <= 1e-9) {
+			d.target = r.min;
+			d.current = r.min;
+			continue;
+		}
+
+		if (redraw)
+			d.target = wiggle_gaussian(d.rng, r.min, r.max, r.mid);
+		d.current += (d.target - d.current) * blend;
+	}
+
+	wigglePhase += seconds * wiggleDrift[kWiggleSpeedParam].current;
 }
 
 double MotionCraftController::levelZoom(int level) const
@@ -1293,10 +1408,16 @@ void MotionCraftController::setWiggleEnabled(bool on)
 		lastTickMs = 0;
 		pendingFinish.store(false, std::memory_order_release);
 		wigglePhase = 0.0;
-		wiggleSpeedTimer = 0.0;
-		wiggleSpeedCurrent = clampd(std::min(wiggleSpeedMin, wiggleSpeedMax), 0.0, kWiggleSpeedMax);
-		wiggleSpeedTarget = wiggleSpeedCurrent;
-		wiggleSpeedRng = (uint32_t)wiggleSeed;
+		/* Start on the midpoints and let the first window run out before
+		 * anything is redrawn, so the wiggle opens on the motion the user set
+		 * rather than on whatever the first draw happens to be. */
+		wiggleSampleTimer = kWiggleSampleSec;
+		for (int i = 0; i < kWiggleParamCount; i++) {
+			const WiggleRange r = wiggleRangeFor(i);
+			wiggleDrift[i].current = r.mid;
+			wiggleDrift[i].target = r.mid;
+			wiggleDrift[i].rng = (uint32_t)wiggleSeed + (uint32_t)i * 0x9e3779b9u;
+		}
 	}
 
 	wiggleRunning.store(true, std::memory_order_release);
@@ -1365,9 +1486,9 @@ void MotionCraftController::resetState()
 	wiggleRunning.store(false, std::memory_order_release);
 	abortRequested.store(false, std::memory_order_release);
 	wigglePhase = 0.0;
-	wiggleSpeedCurrent = 0.0;
-	wiggleSpeedTarget = 0.0;
-	wiggleSpeedTimer = 0.0;
+	for (int i = 0; i < kWiggleParamCount; i++)
+		wiggleDrift[i] = WiggleDrift{};
+	wiggleSampleTimer = 0.0;
 	wiggleSafety = 1.0;
 	requestedLevel = 0;
 	targetLevel.store(0, std::memory_order_relaxed);
@@ -3082,9 +3203,22 @@ void MotionCraftController::applyZoomToScene(double z)
 	 * composed scene apart - the included-source list is what decides which
 	 * layers the camera carries. */
 	const bool wiggling = wiggleShaping();
-	const double ampPos = wiggling ? clampd(wigglePositionPx, 0.0, kWigglePositionMaxPx) : 0.0;
-	const double ampRot = wiggling ? clampd(wiggleRotationDeg, 0.0, kWiggleRotationMaxDeg) : 0.0;
-	const double ampScale = wiggling ? clampd(wiggleScalePct, 0.0, kWiggleScaleMaxPct) / 100.0 : 0.0;
+
+	/* Two amplitudes per component, and the difference matters.
+	 *
+	 * ampRot and ampScale are the top of their ranges: the roll reservation
+	 * and the framing clamp below are what guarantee no background is exposed,
+	 * and they have to hold for every value the jitter can draw next, not for
+	 * the one it happens to be on now.
+	 *
+	 * The now* values are this frame's eased draw, and are what the noise is
+	 * actually multiplied by. The drift needs no maximum of its own because it
+	 * is clamped into the pan interval either way. */
+	const double ampRot = wiggling ? wiggleRangeFor(kWiggleRotParam).max : 0.0;
+	const double ampScale = wiggling ? wiggleRangeFor(kWiggleScaleParam).max / 100.0 : 0.0;
+	const double nowPos = wiggling ? std::max(0.0, wiggleDrift[kWigglePosParam].current) : 0.0;
+	const double nowRot = wiggling ? std::max(0.0, wiggleDrift[kWiggleRotParam].current) : 0.0;
+	const double nowScale = wiggling ? std::max(0.0, wiggleDrift[kWiggleScaleParam].current) / 100.0 : 0.0;
 
 	double wiggleDriftX = 0.0;
 	double wiggleDriftY = 0.0;
@@ -3092,10 +3226,10 @@ void MotionCraftController::applyZoomToScene(double z)
 	double wiggleBreath = 1.0;
 	if (wiggling) {
 		const uint32_t seed = (uint32_t)wiggleSeed;
-		wiggleDriftX = wiggle_noise(wigglePhase, seed) * ampPos;
-		wiggleDriftY = wiggle_noise(wigglePhase, seed + 1000u) * ampPos;
-		wiggleRoll = wiggle_noise(wigglePhase, seed + 2000u) * ampRot;
-		wiggleBreath = 1.0 + wiggle_noise(wigglePhase, seed + 3000u) * ampScale;
+		wiggleDriftX = wiggle_noise(wigglePhase, seed) * nowPos;
+		wiggleDriftY = wiggle_noise(wigglePhase, seed + 1000u) * nowPos;
+		wiggleRoll = wiggle_noise(wigglePhase, seed + 2000u) * nowRot;
+		wiggleBreath = 1.0 + wiggle_noise(wigglePhase, seed + 3000u) * nowScale;
 	}
 
 	/* Two zoom values from here on.
@@ -3671,7 +3805,7 @@ void MotionCraftController::videoTick(double seconds)
 	}
 
 	if (wiggling)
-		updateWiggleSpeed(tickDeltaSeconds);
+		updateWiggleParams(tickDeltaSeconds);
 
 	applyZoomToScene(currentZoom);
 }
