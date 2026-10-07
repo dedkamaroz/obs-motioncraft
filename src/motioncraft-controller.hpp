@@ -230,8 +230,15 @@ public:
 	static constexpr double kExposureAmountMax = 100.0;    /* a dial, like smoothing */
 	static constexpr double kExposureMaxBrightness = 0.18; /* full-amount level swing, color_filter units */
 	static constexpr double kExposureMaxContrast = 0.30;   /* full-amount black/white spread, color_filter units */
+	static constexpr double kExposureSensitivityMax = 100.0; /* a 0..100 dial, linear */
+	/* The dial's two ends, in on-screen pixels/second of motion that reach full
+	 * swing: dial 1 needs a brisk 50 px/s move, dial 100 fires on a 1 px/s crawl.
+	 * Linear between them; see sensitivityToSpeedRefPx. */
+	static constexpr double kExposureSpeedRefPxLo = 1.0;  /* dial 100 */
+	static constexpr double kExposureSpeedRefPxHi = 50.0; /* dial 1 */
 	bool exposureEnabled = false;
-	double exposureAmount = 35.0; /* 0..kExposureAmountMax */
+	double exposureAmount = 35.0;       /* 0..kExposureAmountMax */
+	double exposureSensitivity = 30.0;  /* 0..kExposureSensitivityMax, linear px/s dial */
 
 	/* Which way each translational wiggle/pan direction pushes the two controls
 	 * - the level (brightness) and the black/white spread (contrast). Rolled
@@ -406,6 +413,7 @@ private:
 	struct ExposureInputs {
 		bool enabled = false;
 		double amount = 0.0;
+		double sensitivity = 0.0;
 		double lgx = 0.0, lgy = 0.0, sgx = 0.0, sgy = 0.0;
 	};
 	ExposureInputs exposureShared;
@@ -496,8 +504,14 @@ private:
 	double exposureLevelGx = 0.0, exposureLevelGy = 1.0;
 	double exposureSpreadGx = 1.0, exposureSpreadGy = 0.0;
 
-	/* One channel of the spring: lag the signed drive, then chase it. */
-	static double stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds);
+	/* One channel of the spring: lag the signed drive, then chase it. speedRef is
+	 * the velocity (diagonal-fractions/s) that saturates the response - set per
+	 * call from the Sensitivity dial rather than fixed. */
+	static double stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds, double speedRef);
+
+	/* The Sensitivity dial (0..kExposureSensitivityMax) mapped linearly to the
+	 * on-screen motion, in pixels/second, that reaches full swing. */
+	static double sensitivityToSpeedRefPx(double sensitivity);
 
 	/* Computed once per capture: how much every item has to be enlarged so the
 	 * drift cannot pull the canvas background into view. */

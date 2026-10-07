@@ -1,5 +1,6 @@
 #include "motioncraft-dialog.hpp"
 #include "motioncraft-controller.hpp"
+#include "plugin-support.h"
 
 #include <obs-module.h>
 #include <obs-frontend-api.h>
@@ -134,7 +135,9 @@ static QString friendlySourceKind(const QString &kind)
 
 MotionCraftDialog::MotionCraftDialog(QWidget *parent) : QDialog(parent)
 {
-	setWindowTitle(T("MotionCraft"));
+	/* Version in the title so a deploy is confirmable at a glance: if OBS still
+	 * shows the old number after an update, the new DLL did not load. */
+	setWindowTitle(QString("%1  v%2").arg(T("MotionCraft"), PLUGIN_VERSION));
 	setModal(false);
 	resize(620, 560);
 
@@ -624,6 +627,12 @@ void MotionCraftDialog::buildWiggleTab()
 	spExposureAmount->setDecimals(0);
 	spExposureAmount->setToolTip(T("Dialog.Exposure.AmountTooltip"));
 
+	spExposureSensitivity = new QDoubleSpinBox(page);
+	spExposureSensitivity->setRange(0.0, MotionCraftController::kExposureSensitivityMax);
+	spExposureSensitivity->setSingleStep(1.0);
+	spExposureSensitivity->setDecimals(0);
+	spExposureSensitivity->setToolTip(T("Dialog.Exposure.SensitivityTooltip"));
+
 	btnRandomiseExposure = new QPushButton(T("Dialog.Exposure.Randomise"), page);
 	btnRandomiseExposure->setToolTip(T("Dialog.Exposure.RandomiseTooltip"));
 	connect(btnRandomiseExposure, &QPushButton::clicked, this, [this]() {
@@ -639,6 +648,7 @@ void MotionCraftDialog::buildWiggleTab()
 	auto *expoRow = new QHBoxLayout;
 	expoRow->setSpacing(12);
 	expoRow->addWidget(mkField(T("Dialog.Exposure.Amount"), spExposureAmount), 1);
+	expoRow->addWidget(mkField(T("Dialog.Exposure.Sensitivity"), spExposureSensitivity), 1);
 	expoRow->addWidget(btnRandomiseExposure);
 	expoRow->addStretch(1);
 	lay->addLayout(expoRow);
@@ -834,6 +844,7 @@ void MotionCraftDialog::loadFromController()
 		spWiggleSeed->setValue(c.wiggleSeed);
 		chkExposureEnabled->setChecked(c.exposureEnabled);
 		spExposureAmount->setValue(c.exposureAmount);
+		spExposureSensitivity->setValue(c.exposureSensitivity);
 	}
 
 	if (lstSources)
@@ -902,6 +913,7 @@ void MotionCraftDialog::applyToController()
 	c.wiggleSeed = spWiggleSeed->value();
 	c.exposureEnabled = chkExposureEnabled->isChecked();
 	c.exposureAmount = spExposureAmount->value();
+	c.exposureSensitivity = spExposureSensitivity->value();
 
 	c.includedSources.clear();
 	if (lstSources) {

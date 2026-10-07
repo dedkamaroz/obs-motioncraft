@@ -12,7 +12,8 @@
  *   - once the camera stops, each control returns to neutral, overshooting zero
  *     on the way (the auto-exposure "hunting", not a one-way fade);
  *   - the two controls (level, spread) are independent;
- *   - the Amount dial scales both, and zero means off.
+ *   - the Amount dial scales both, and zero means off;
+ *   - the Sensitivity dial maps linearly to its two named pixel-speed anchors.
  *
  *   cl /EHsc /O2 tests\exposure-test.cpp
  */
@@ -43,11 +44,25 @@ static const double PI = 3.14159265358979323846;
 static const double kExposureReactTau = 0.15;
 static const double kExposureSettleSec = 0.70;
 static const double kExposureDamping = 0.55;
-static const double kExposureSpeedRef = 1.2;
 static const double kExposureMaxSubstepSec = 1.0 / 120.0;
 static const double kExposureMaxBrightness = 0.18;
 static const double kExposureMaxContrast = 0.30;
 static const double kExposureAmountMax = 100.0;
+static const double kExposureSensitivityMax = 100.0;
+static const double kExposureSpeedRefPxLo = 1.0;  /* dial 100 */
+static const double kExposureSpeedRefPxHi = 50.0; /* dial 1 */
+
+/* A representative saturation ref (diagonal-fractions/s) for the spring-dynamics
+ * checks below, which are independent of the dial value. */
+static const double kTestSpeedRef = 1.2;
+
+/* The Sensitivity dial (0..100) -> pixels/second of motion for full swing. */
+static double sensitivityToSpeedRefPx(double sensitivity)
+{
+	const double s = clampd(sensitivity, 0.0, kExposureSensitivityMax);
+	const double refPx = kExposureSpeedRefPxHi + (s - 1.0) * (kExposureSpeedRefPxLo - kExposureSpeedRefPxHi) / 99.0;
+	return clampd(refPx, kExposureSpeedRefPxLo, kExposureSpeedRefPxHi);
+}
 
 struct ExpoChannel {
 	double activity = 0.0;
@@ -55,9 +70,9 @@ struct ExpoChannel {
 	double vel = 0.0;
 };
 
-static double stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds)
+static double stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds, double speedRef = kTestSpeedRef)
 {
-	const double target = std::tanh(signedDrive / kExposureSpeedRef);
+	const double target = std::tanh(signedDrive / speedRef);
 	const double omega = 2.0 * PI / kExposureSettleSec;
 
 	int steps = (int)std::ceil(seconds / kExposureMaxSubstepSec);
@@ -179,6 +194,20 @@ int main()
 		expect(contrastOf(1.0, 100.0) > contrastOf(1.0, 50.0), "amount scales the contrast swing");
 		expect(brightnessOf(1.0, 100.0) <= kExposureMaxBrightness + 1e-9, "brightness stays within its ceiling");
 		expect(contrastOf(1.0, 100.0) <= kExposureMaxContrast + 1e-9, "contrast stays within its ceiling");
+	}
+
+	/* Sensitivity dial: linear, hitting the two named pixel-speed anchors and
+	 * clamped past the ends. Dial 1 -> 50 px/s, dial 100 -> 1 px/s, midpoint on
+	 * the straight line between them, 0 clamped to the slow end. */
+	{
+		expect(std::fabs(sensitivityToSpeedRefPx(1.0) - 50.0) < 1e-9, "dial 1 needs ~50 px/s for full swing");
+		expect(std::fabs(sensitivityToSpeedRefPx(100.0) - 1.0) < 1e-9, "dial 100 fires on a ~1 px/s crawl");
+		const double mid = sensitivityToSpeedRefPx(50.5); /* halfway in dial -> halfway in px */
+		expect(std::fabs(mid - 25.5) < 1e-9, "the dial is linear between its ends");
+		expect(sensitivityToSpeedRefPx(0.0) <= 50.0 + 1e-9 && sensitivityToSpeedRefPx(0.0) >= 50.0 - 1e-9,
+		       "dial 0 clamps to the slow end");
+		expect(sensitivityToSpeedRefPx(37.0) > sensitivityToSpeedRefPx(73.0),
+		       "a higher dial needs less motion (smaller px/s) for full swing");
 	}
 
 	std::printf("\n%s\n", g_failures ? "FAILURES" : "all ok");

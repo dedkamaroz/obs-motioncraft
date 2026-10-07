@@ -714,6 +714,7 @@ void MotionCraftController::loadSettings()
 	wiggleSeed = 1234;
 	exposureEnabled = false;
 	exposureAmount = 35.0;
+	exposureSensitivity = 30.0;
 
 	const QString p = configPath();
 	if (p.isEmpty())
@@ -906,6 +907,9 @@ void MotionCraftController::loadSettings()
 		exposureEnabled = obs_data_get_bool(data, "exposure_enabled");
 	if (obs_data_has_user_value(data, "exposure_amount"))
 		exposureAmount = clampd(obs_data_get_double(data, "exposure_amount"), 0.0, kExposureAmountMax);
+	if (obs_data_has_user_value(data, "exposure_sensitivity"))
+		exposureSensitivity =
+			clampd(obs_data_get_double(data, "exposure_sensitivity"), 0.0, kExposureSensitivityMax);
 
 	/* A settings file written before the ranges existed holds one number per
 	 * amplitude. Adopting it as a range of zero width keeps that install
@@ -1027,6 +1031,7 @@ void MotionCraftController::saveSettings()
 	obs_data_set_bool(data, "wiggle_enabled", wiggleEnabled);
 	obs_data_set_bool(data, "exposure_enabled", exposureEnabled);
 	obs_data_set_double(data, "exposure_amount", exposureAmount);
+	obs_data_set_double(data, "exposure_sensitivity", exposureSensitivity);
 	auto saveRange = [data](const char *stem, const WiggleRange &r) {
 		char key[64];
 		snprintf(key, sizeof key, "wiggle_%s_min", stem);
@@ -2784,16 +2789,25 @@ static const char *const kExposureOwnerTag = "motioncraft_owned";
 static constexpr double kExposureReactTau = 0.15;  /* s: lag of the onset - the "slight delay" */
 static constexpr double kExposureSettleSec = 0.70; /* s: natural period of the settle-back */
 static constexpr double kExposureDamping = 0.55;   /* <1: underdamped, so it overshoots once then recovers */
-static constexpr double kExposureSpeedRef = 1.2;   /* framing-fractions/s that saturate the response */
 static constexpr double kExposureMaxSubstepSec = 1.0 / 120.0; /* spring step cap, for frame-rate independence */
 
-double MotionCraftController::stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds)
+/* Linear dial -> pixels/second of on-screen motion for full swing. Dial 1 wants
+ * a brisk 50 px/s, dial 100 a 1 px/s crawl; a line through those two points.
+ * Clamped to the band so a 0 (or anything off the ends) still reads sanely. */
+double MotionCraftController::sensitivityToSpeedRefPx(double sensitivity)
+{
+	const double s = clampd(sensitivity, 0.0, kExposureSensitivityMax);
+	const double refPx = kExposureSpeedRefPxHi + (s - 1.0) * (kExposureSpeedRefPxLo - kExposureSpeedRefPxHi) / 99.0;
+	return clampd(refPx, kExposureSpeedRefPxLo, kExposureSpeedRefPxHi);
+}
+
+double MotionCraftController::stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds, double speedRef)
 {
 	/* Saturate, keeping the sign, so no one fast move slams a control to the
 	 * rail. The lag applied below is the delay before the control starts to move
 	 * and the brief linger after the camera stops, so it does not snap back the
 	 * instant motion ends. */
-	const double target = std::tanh(signedDrive / kExposureSpeedRef);
+	const double target = std::tanh(signedDrive / speedRef);
 	const double omega = 2.0 * 3.14159265358979323846 / kExposureSettleSec;
 
 	/* Fixed-size substeps. Explicit Euler on an underdamped spring changes its
@@ -2863,8 +2877,11 @@ void MotionCraftController::advanceExposure(double fx, double fy, double zApply,
 	const double levelDrive = vx * in.lgx + vy * in.lgy;
 	const double spreadDrive = vx * in.sgx + vy * in.sgy;
 
-	const double level = stepExposureChannel(exposureLevel, levelDrive, seconds);
-	const double spread = stepExposureChannel(exposureSpread, spreadDrive, seconds);
+	/* The drive (vx, vy) is in diagonal-fractions/s, so convert the dial's px/s
+	 * saturation point into the same units before it is the tanh denominator. */
+	const double speedRef = sensitivityToSpeedRefPx(in.sensitivity) / diag;
+	const double level = stepExposureChannel(exposureLevel, levelDrive, seconds, speedRef);
+	const double spread = stepExposureChannel(exposureSpread, spreadDrive, seconds, speedRef);
 
 	if (!in.enabled)
 		return;
@@ -2965,7 +2982,7 @@ void MotionCraftController::applyExposureToSources()
 	double brightness = 0.0, contrast = 0.0;
 	{
 		std::lock_guard<std::mutex> lock(inputMutex);
-		exposureShared = {exposureEnabled, exposureAmount, exposureLevelGx,
+		exposureShared = {exposureEnabled,  exposureAmount,    exposureSensitivity, exposureLevelGx,
 				  exposureLevelGy, exposureSpreadGx, exposureSpreadGy};
 		brightness = pendingExposureBrightness;
 		contrast = pendingExposureContrast;

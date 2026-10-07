@@ -96,6 +96,7 @@ private:
 
 	QCheckBox *chkExposureEnabled = nullptr;
 	QDoubleSpinBox *spExposureAmount = nullptr;
+	QDoubleSpinBox *spExposureSensitivity = nullptr;
 	QPushButton *btnRandomiseExposure = nullptr;
 
 	QListWidget *lstSources = nullptr;

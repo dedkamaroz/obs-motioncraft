@@ -97,8 +97,10 @@ OBS headers and libraries are fetched automatically by the build.
 git clone https://github.com/dedkamaroz/obs-motioncraft.git
 cd obs-motioncraft
 cmake --preset windows-x64        # or macos / ubuntu-x86_64
-cmake --build build_x64 --config Release
+cmake --build build_x64 --config RelWithDebInfo
 ```
+
+The config must match what `deploy-to-obs.ps1` deploys (it defaults to `RelWithDebInfo`), or the script will copy a stale DLL from a different config and your changes will not appear in OBS.
 
 ### Deploy locally (Windows)
 
@@ -108,7 +110,7 @@ After building, copy the plugin into your OBS install with the helper script:
 .\deploy-to-obs.ps1
 ```
 
-It copies `motioncraft.dll` into `obs-plugins\64bit` and the locale data into `data\obs-plugins\motioncraft`, self-elevates for `Program Files`, and refuses to run while OBS is open (the DLL would be locked). Pass `-ObsDir` or `-Config Release` for a non-default install path or build type. Restart OBS afterwards.
+It copies `motioncraft.dll` into `obs-plugins\64bit` and the locale data into `data\obs-plugins\motioncraft`, self-elevates for `Program Files`, and refuses to run while OBS is open (the DLL would be locked). Pass `-ObsDir` or `-Config Release` for a non-default install path or build type. Restart OBS afterwards. The dialog title shows the running version (**Tools → MotionCraft …**) - if it does not match `buildspec.json` after a deploy, the new DLL did not load.
 
 ### Tests
 
