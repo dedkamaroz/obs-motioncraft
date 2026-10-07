@@ -100,6 +100,16 @@ cmake --preset windows-x64        # or macos / ubuntu-x86_64
 cmake --build build_x64 --config Release
 ```
 
+### Deploy locally (Windows)
+
+After building, copy the plugin into your OBS install with the helper script:
+
+```powershell
+.\deploy-to-obs.ps1
+```
+
+It copies `motioncraft.dll` into `obs-plugins\64bit` and the locale data into `data\obs-plugins\motioncraft`, self-elevates for `Program Files`, and refuses to run while OBS is open (the DLL would be locked). Pass `-ObsDir` or `-Config Release` for a non-default install path or build type. Restart OBS afterwards.
+
 ### Tests
 
 The geometry is checked offline, without OBS, so the maths can be verified without a running scene:
@@ -115,6 +125,7 @@ cl /EHsc /O2 tests\scene-item-lifetime-test.cpp && scene-item-lifetime-test.exe
 cl /EHsc /O2 tests\framing-clamp-test.cpp && framing-clamp-test.exe
 cl /EHsc /O2 tests\zoom-geometry-test.cpp && zoom-geometry-test.exe
 cl /EHsc /O2 tests\zoom-level-timing-test.cpp && zoom-level-timing-test.exe
+cl /EHsc /O2 tests\exposure-test.cpp && exposure-test.exe
 ```
 
 ---
