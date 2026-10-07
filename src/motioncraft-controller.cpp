@@ -603,6 +603,9 @@ static void ensure_parent_dir_exists(const QString &filePath)
 void MotionCraftController::initialize()
 {
 	loadSettings();
+	/* Fresh direction mapping each launch - the drift reads a little different
+	 * every session on purpose. The amount dial is left at whatever was saved. */
+	randomiseExposureMapping();
 	rebuildTriggersFromSettings();
 	obs_frontend_add_event_callback(frontendEventCallback, this);
 	obs_add_tick_callback(videoTickCallback, this);
@@ -709,6 +712,8 @@ void MotionCraftController::loadSettings()
 	wiggleSpeed = {1.0, 1.5, 2.0};
 	wiggleSmoothing = {kWiggleSmoothingDefaultUnits, kWiggleSmoothingDefaultUnits, kWiggleSmoothingDefaultUnits};
 	wiggleSeed = 1234;
+	exposureEnabled = false;
+	exposureAmount = 35.0;
 
 	const QString p = configPath();
 	if (p.isEmpty())
@@ -897,6 +902,11 @@ void MotionCraftController::loadSettings()
 	if (obs_data_has_user_value(data, "wiggle_enabled"))
 		wiggleEnabled = obs_data_get_bool(data, "wiggle_enabled");
 
+	if (obs_data_has_user_value(data, "exposure_enabled"))
+		exposureEnabled = obs_data_get_bool(data, "exposure_enabled");
+	if (obs_data_has_user_value(data, "exposure_amount"))
+		exposureAmount = clampd(obs_data_get_double(data, "exposure_amount"), 0.0, kExposureAmountMax);
+
 	/* A settings file written before the ranges existed holds one number per
 	 * amplitude. Adopting it as a range of zero width keeps that install
 	 * looking exactly as it did; widening it is then the user's move, not one
@@ -1015,6 +1025,8 @@ void MotionCraftController::saveSettings()
 	obs_data_set_bool(data, "debug", debug);
 
 	obs_data_set_bool(data, "wiggle_enabled", wiggleEnabled);
+	obs_data_set_bool(data, "exposure_enabled", exposureEnabled);
+	obs_data_set_double(data, "exposure_amount", exposureAmount);
 	auto saveRange = [data](const char *stem, const WiggleRange &r) {
 		char key[64];
 		snprintf(key, sizeof key, "wiggle_%s_min", stem);
@@ -1498,6 +1510,14 @@ void MotionCraftController::resetState()
 		wiggleDrift[i] = WiggleDrift{};
 	wiggleSampleTimer = 0.0;
 	wiggleSafety = 1.0;
+	exposureLevel = ExpoChannel{};
+	exposureSpread = ExpoChannel{};
+	exposurePrevValid = false;
+	/* Drop any brightness/contrast the last session published, so the first
+	 * apply of the next capture cannot stamp stale values (or create filters
+	 * after the drift was switched off) before the first graphics tick. */
+	pendingExposureBrightness = 0.0;
+	pendingExposureContrast = 0.0;
 	requestedLevel = 0;
 	targetLevel.store(0, std::memory_order_relaxed);
 	retargetRequested.store(false, std::memory_order_relaxed);
@@ -2750,6 +2770,233 @@ void MotionCraftController::applyMarkerOpacity(int opacity255)
 	obs_data_release(fsettings);
 }
 
+/* The private Color Correction filter the exposure drift drives. One name so a
+ * filter left behind by a crash is reused rather than stacked. */
+static const char *const kExposureFilterName = "MotionCraftExposure";
+/* Private settings key stamped on filters we create, so a same-named filter the
+ * user made themselves is never adopted, driven or removed. */
+static const char *const kExposureOwnerTag = "motioncraft_owned";
+
+/* Tuning for the exposure drift: the feel of a real auto-exposure loop, not
+ * anything the user reads in units, so it lives here rather than in settings -
+ * the Amount dial is the one knob worth exposing.
+ * ponytail: fixed feel; make react/settle a dial if someone wants to tune it. */
+static constexpr double kExposureReactTau = 0.15;  /* s: lag of the onset - the "slight delay" */
+static constexpr double kExposureSettleSec = 0.70; /* s: natural period of the settle-back */
+static constexpr double kExposureDamping = 0.55;   /* <1: underdamped, so it overshoots once then recovers */
+static constexpr double kExposureSpeedRef = 1.2;   /* framing-fractions/s that saturate the response */
+static constexpr double kExposureMaxSubstepSec = 1.0 / 120.0; /* spring step cap, for frame-rate independence */
+
+double MotionCraftController::stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds)
+{
+	/* Saturate, keeping the sign, so no one fast move slams a control to the
+	 * rail. The lag applied below is the delay before the control starts to move
+	 * and the brief linger after the camera stops, so it does not snap back the
+	 * instant motion ends. */
+	const double target = std::tanh(signedDrive / kExposureSpeedRef);
+	const double omega = 2.0 * 3.14159265358979323846 / kExposureSettleSec;
+
+	/* Fixed-size substeps. Explicit Euler on an underdamped spring changes its
+	 * damping with the step size, so at 20 fps a single step per frame loses the
+	 * overshoot the drift is meant to have; capping the step keeps the lag,
+	 * overshoot and settle the same from 20 to 240 fps. */
+	int steps = (int)std::ceil(seconds / kExposureMaxSubstepSec);
+	if (steps < 1)
+		steps = 1;
+	const double h = seconds / steps;
+	const double reactAlpha = 1.0 - std::exp(-h / kExposureReactTau);
+	for (int i = 0; i < steps; ++i) {
+		ch.activity += (target - ch.activity) * reactAlpha;
+		const double accel = omega * omega * (ch.activity - ch.value) - 2.0 * kExposureDamping * omega * ch.vel;
+		ch.vel += accel * h;
+		ch.value += ch.vel * h;
+	}
+	ch.value = clampd(ch.value, -1.5, 1.5);
+	return ch.value;
+}
+
+void MotionCraftController::advanceExposure(double fx, double fy, double zApply, double offsetX, double offsetY,
+					    double seconds, double &brightnessOut, double &contrastOut)
+{
+	if (seconds <= 0.0)
+		seconds = 1.0 / 60.0;
+
+	brightnessOut = 0.0;
+	contrastOut = 0.0;
+
+	/* The inputs come from a snapshot the main thread publishes under inputMutex,
+	 * never straight off the live members - the dialog and the Randomise button
+	 * write those on the main thread, and reading them here unsynchronised is a
+	 * data race. */
+	ExposureInputs in;
+	{
+		std::lock_guard<std::mutex> lock(inputMutex);
+		in = exposureShared;
+	}
+
+	obs_video_info ovi{};
+	const double diag = obs_get_video_info(&ovi) ? std::hypot((double)ovi.base_width, (double)ovi.base_height)
+						     : std::hypot(1920.0, 1080.0);
+
+	/* Signed pan velocity since last frame, in fractions of the frame per
+	 * second. The on-screen motion of a fixed content point is d(offset) minus
+	 * the zoom times d(focal point): the follow pan lives in the focal point and
+	 * the wiggle drift lives in offset, so taking both means a follow pan and a
+	 * wiggle both count, and at a framing edge where offset cancels the pan the
+	 * signal correctly falls to zero. The sign is the direction, which is the
+	 * whole point of driving it this way rather than off a magnitude. */
+	double vx = 0.0, vy = 0.0;
+	if (exposurePrevValid) {
+		vx = ((offsetX - exposurePrevOffsetX) - zApply * (fx - exposurePrevFx)) / diag / seconds;
+		vy = ((offsetY - exposurePrevOffsetY) - zApply * (fy - exposurePrevFy)) / diag / seconds;
+	}
+	exposurePrevOffsetX = offsetX;
+	exposurePrevOffsetY = offsetY;
+	exposurePrevFx = fx;
+	exposurePrevFy = fy;
+	exposurePrevValid = true;
+
+	/* Each control is the velocity projected onto its own gain vector: the
+	 * projection carries the direction, so which way the camera moved decides
+	 * whether the level lifts or drops and whether the black/white points spread
+	 * or close. The two gain vectors were rolled at startup / by Randomise. */
+	const double levelDrive = vx * in.lgx + vy * in.lgy;
+	const double spreadDrive = vx * in.sgx + vy * in.sgy;
+
+	const double level = stepExposureChannel(exposureLevel, levelDrive, seconds);
+	const double spread = stepExposureChannel(exposureSpread, spreadDrive, seconds);
+
+	if (!in.enabled)
+		return;
+
+	const double amount01 = clampd(in.amount, 0.0, kExposureAmountMax) / kExposureAmountMax;
+	brightnessOut = clampd(level * kExposureMaxBrightness * amount01, -1.0, 1.0);
+	contrastOut = clampd(spread * kExposureMaxContrast * amount01, -1.0, 1.0);
+}
+
+/* Roll a fresh direction mapping. Each control gets a gain vector with a random
+ * sign on each axis and a different magnitude per axis, and the two controls are
+ * randomly handed the vertical or the horizontal as their primary axis - so a
+ * given drift direction might lift the level one session and crush the black
+ * point the next, which is the point. Seeded off the clock, so it differs every
+ * launch; deliberately not saved. Written on the main thread; the graphics
+ * thread only ever sees it through the inputMutex snapshot. */
+void MotionCraftController::randomiseExposureMapping()
+{
+	uint32_t r = wiggle_hash((uint32_t)QDateTime::currentMSecsSinceEpoch() ^ (uint32_t)(uintptr_t)this);
+
+	auto nextBit = [&r]() {
+		r = wiggle_hash(r + 0x9e3779b9u);
+		return (r & 1u) != 0u;
+	};
+	auto nextMag = [&r]() {
+		r = wiggle_hash(r + 0x9e3779b9u);
+		/* 0.55..1.0: one axis always reads clearly louder than the other. */
+		return 0.55 + ((double)(r & 0xffffu) / 65535.0) * 0.45;
+	};
+
+	const double levelV = nextMag(), levelH = nextMag();
+	const double spreadV = nextMag(), spreadH = nextMag();
+	const double sLV = nextBit() ? 1.0 : -1.0;
+	const double sLH = nextBit() ? 1.0 : -1.0;
+	const double sSV = nextBit() ? 1.0 : -1.0;
+	const double sSH = nextBit() ? 1.0 : -1.0;
+
+	if (nextBit()) {
+		/* Level led by the vertical, spread by the horizontal. */
+		exposureLevelGx = sLH * levelH * 0.4;
+		exposureLevelGy = sLV * levelV;
+		exposureSpreadGx = sSH * spreadH;
+		exposureSpreadGy = sSV * spreadV * 0.4;
+	} else {
+		/* Swapped: level led by the horizontal, spread by the vertical. */
+		exposureLevelGx = sLH * levelH;
+		exposureLevelGy = sLV * levelV * 0.4;
+		exposureSpreadGx = sSH * spreadH * 0.4;
+		exposureSpreadGy = sSV * spreadV;
+	}
+}
+
+void MotionCraftController::ensureExposureFilter(SceneItemState &state)
+{
+	if (state.exposureFilter || !state.item)
+		return;
+
+	obs_source_t *src = obs_sceneitem_get_source(state.item);
+	if (!src)
+		return;
+
+	/* Adopt a filter of ours left behind rather than stacking a second - but
+	 * only one that is actually ours. A name match alone is not enough: a user
+	 * could have their own Color Correction filter with this name, and adopting
+	 * it would drive and later strip their filter. Ownership is a private
+	 * settings tag we write at creation; a match without the tag is left alone
+	 * and we fall through to make our own. */
+	obs_source_t *existing = obs_source_get_filter_by_name(src, kExposureFilterName);
+	if (existing) {
+		obs_data_t *es = obs_source_get_settings(existing);
+		const bool ours = es && obs_data_get_bool(es, kExposureOwnerTag);
+		if (es)
+			obs_data_release(es);
+		if (ours) {
+			state.exposureFilter = existing; /* ref now owned by us */
+			return;
+		}
+		obs_source_release(existing); /* someone else's; do not touch it */
+	}
+
+	obs_data_t *fsettings = obs_data_create();
+	obs_data_set_bool(fsettings, kExposureOwnerTag, true);
+	obs_data_set_double(fsettings, "brightness", 0.0);
+	obs_data_set_double(fsettings, "contrast", 0.0);
+	state.exposureFilter = obs_source_create_private("color_filter", kExposureFilterName, fsettings);
+	obs_data_release(fsettings);
+
+	if (state.exposureFilter)
+		obs_source_filter_add(src, state.exposureFilter);
+}
+
+void MotionCraftController::applyExposureToSources()
+{
+	/* Runs on the main thread. Publish the live inputs for the graphics thread
+	 * in the same lock that reads back the values it published, so the handoff
+	 * is one consistent snapshot each way. */
+	const bool active = exposureEnabled;
+	double brightness = 0.0, contrast = 0.0;
+	{
+		std::lock_guard<std::mutex> lock(inputMutex);
+		exposureShared = {exposureEnabled, exposureAmount, exposureLevelGx,
+				  exposureLevelGy, exposureSpreadGx, exposureSpreadGy};
+		brightness = pendingExposureBrightness;
+		contrast = pendingExposureContrast;
+	}
+
+	for (auto &state : sceneItems) {
+		if (!state.item)
+			continue;
+		/* Off and never touched: leave the source exactly as it was. */
+		if (!active && !state.exposureFilter)
+			continue;
+
+		const int bMilli = (int)std::lround(clampd(active ? brightness : 0.0, -1.0, 1.0) * 1000.0);
+		const int cMilli = (int)std::lround(clampd(active ? contrast : 0.0, -1.0, 1.0) * 1000.0);
+		if (state.exposureBrightnessMilli == bMilli && state.exposureContrastMilli == cMilli)
+			continue;
+
+		ensureExposureFilter(state);
+		if (!state.exposureFilter)
+			continue;
+
+		obs_data_t *fsettings = obs_data_create();
+		obs_data_set_double(fsettings, "brightness", (double)bMilli / 1000.0);
+		obs_data_set_double(fsettings, "contrast", (double)cMilli / 1000.0);
+		obs_source_update(state.exposureFilter, fsettings);
+		obs_data_release(fsettings);
+		state.exposureBrightnessMilli = bMilli;
+		state.exposureContrastMilli = cMilli;
+	}
+}
+
 void MotionCraftController::ensureMarkerSource()
 {
 	if (markerSource)
@@ -3058,6 +3305,16 @@ void MotionCraftController::captureOriginal(obs_sceneitem_t *item)
 void MotionCraftController::releaseSceneItems()
 {
 	for (auto &state : sceneItems) {
+		/* Take the exposure filter back off the source first, so the source is
+		 * left exactly as it was found - the same contract the transform
+		 * restore honours. */
+		if (state.exposureFilter) {
+			obs_source_t *src = state.item ? obs_sceneitem_get_source(state.item) : nullptr;
+			if (src)
+				obs_source_filter_remove(src, state.exposureFilter);
+			obs_source_release(state.exposureFilter);
+			state.exposureFilter = nullptr;
+		}
 		if (state.item)
 			obs_sceneitem_release(state.item);
 	}
@@ -3552,6 +3809,20 @@ void MotionCraftController::applyZoomToScene(double z)
 		offsetY = clampd(offsetY + wiggleDriftY, panLoY, panHiY);
 	}
 
+	/* Exposure drift, published before the steady-follow early-return below so it
+	 * still advances (and settles) on frames the transform write is skipped. It
+	 * reads the full applied pan - the focal point and the offset both - so a
+	 * follow pan counts, not only the wiggle that lands in offset. Published like
+	 * the marker, because a filter change mutates the scene graph and must not
+	 * happen from the graphics tick. */
+	{
+		double brightness = 0.0, contrast = 0.0;
+		advanceExposure(fx, fy, zApply, offsetX, offsetY, tickDeltaSeconds, brightness, contrast);
+		std::lock_guard<std::mutex> lock(inputMutex);
+		pendingExposureBrightness = brightness;
+		pendingExposureContrast = contrast;
+	}
+
 	const qint64 nowApplyMs = nowMs;
 	/* Skipping a frame because the follow anchor has not moved is only free
 	 * while nothing else is animating. A wiggle moves every frame by
@@ -3709,6 +3980,10 @@ void MotionCraftController::onTick()
 			hideMarkerInScene(sc);
 		}
 	}
+
+	/* Exposure drift is a filter change, so it too is applied here from what the
+	 * graphics tick published. */
+	applyExposureToSources();
 
 	int cx = 0, cy = 0;
 	float sx = 0.0f, sy = 0.0f;

@@ -94,6 +94,10 @@ private:
 	QDoubleSpinBox *spWiggleRange[MotionCraftController::kWiggleParamCount][kRangeCols] = {};
 	QSpinBox *spWiggleSeed = nullptr;
 
+	QCheckBox *chkExposureEnabled = nullptr;
+	QDoubleSpinBox *spExposureAmount = nullptr;
+	QPushButton *btnRandomiseExposure = nullptr;
+
 	QListWidget *lstSources = nullptr;
 
 	QLabel *lblStatus = nullptr;

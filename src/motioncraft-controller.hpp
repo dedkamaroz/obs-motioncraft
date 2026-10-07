@@ -217,6 +217,31 @@ public:
 
 	void setWiggleEnabled(bool on);
 
+	/* Exposure drift: a fake auto-exposure that answers which way the camera is
+	 * panning - follow and wiggle together - by lagging behind it, wavering,
+	 * then settling back to neutral once the motion stops. Two controls on a
+	 * private Color Correction filter per carried source: the pan direction
+	 * drives the overall level (brightness) and the black/white spread
+	 * (contrast). Nothing is read back from the pixels, so it follows the
+	 * motion, not the real scene luminance. It rides on the zoom and wiggle:
+	 * when neither is running the tick is not alive, so it costs nothing; while
+	 * a capture is live the springs are advanced each frame even with the drift
+	 * switched off (a few flops), so re-enabling mid-capture resumes cleanly. */
+	static constexpr double kExposureAmountMax = 100.0;    /* a dial, like smoothing */
+	static constexpr double kExposureMaxBrightness = 0.18; /* full-amount level swing, color_filter units */
+	static constexpr double kExposureMaxContrast = 0.30;   /* full-amount black/white spread, color_filter units */
+	bool exposureEnabled = false;
+	double exposureAmount = 35.0; /* 0..kExposureAmountMax */
+
+	/* Which way each translational wiggle/pan direction pushes the two controls
+	 * - the level (brightness) and the black/white spread (contrast). Rolled
+	 * fresh at every OBS launch and by the Randomise button, deliberately not
+	 * saved: the same drift should never read quite the same twice, so "up"
+	 * might brighten one session and darken the next. The button pairs this with
+	 * a fresh amount staged in the dialog (not written here), so Cancel still
+	 * discards it like any other setting. */
+	void randomiseExposureMapping();
+
 	/* The only way a range is read: spin boxes and settings files can both
 	 * hand over an inverted or out-of-bounds one, and everything downstream -
 	 * the dialog included - has to see the same sane version of it. */
@@ -323,6 +348,13 @@ private:
 	int currentMarkerOpacity(qint64 nowMs);
 	void applyZoomToScene(double z);
 
+	/* Exposure drift. advanceExposure runs both spring channels on the graphics
+	 * thread from this frame's pan, and writes the brightness and contrast to
+	 * publish; applyExposureToSources (defined below, once SceneItemState
+	 * exists) pushes them onto each source's filter on the main thread. */
+	void advanceExposure(double fx, double fy, double zApply, double offsetX, double offsetY, double seconds,
+			     double &brightnessOut, double &contrastOut);
+
 	/* Split loop. Frame-critical work runs on OBS's graphics thread via
 	 * obs_add_tick_callback so the transform lands exactly once per rendered
 	 * frame, at whatever output fps is configured - a free-running Qt timer
@@ -360,6 +392,23 @@ private:
 	bool pendingMarkerVisible = false;
 	double pendingMarkerX = 0.0;
 	double pendingMarkerY = 0.0;
+	/* Brightness the graphics thread wants on every carried source, applied by
+	 * the main-thread tick. active is false when the drift is off, which tells
+	 * the tick to neutralise any filter it had already put on. */
+	double pendingExposureBrightness = 0.0;
+	double pendingExposureContrast = 0.0;
+
+	/* The exposure inputs the graphics thread needs - enable, amount and the
+	 * four direction gains - snapshotted under inputMutex each main-thread tick
+	 * so advanceExposure never reads them while the dialog or Randomise button
+	 * is writing the live members. Writers touch the public members on the main
+	 * thread only; this is the one-way handoff to the render thread. */
+	struct ExposureInputs {
+		bool enabled = false;
+		double amount = 0.0;
+		double lgx = 0.0, lgy = 0.0, sgx = 0.0, sgy = 0.0;
+	};
+	ExposureInputs exposureShared;
 	bool tickCallbackAdded = false;
 	std::atomic<bool> tickingWanted{false};
 	std::atomic<bool> pendingFinish{false};
@@ -420,6 +469,35 @@ private:
 	};
 	WiggleDrift wiggleDrift[kWiggleParamCount];
 	double wiggleSampleTimer = 0.0;
+
+	/* Exposure drift, graphics-thread only. Two independent channels - level
+	 * (brightness) and spread (black/white points, via contrast) - each an
+	 * underdamped spring chasing a lagged, SIGNED drive, so a burst of motion
+	 * overshoots and settles rather than snapping. activity is the lagged drive:
+	 * its lag is the slight delay before the control starts to move, and its
+	 * sign is the direction of the move. prev* are last frame's applied pan,
+	 * differenced to get the signed velocity the mapping projects onto. */
+	struct ExpoChannel {
+		double activity = 0.0; /* lagged signed drive, ~[-1,1] */
+		double value = 0.0;    /* spring position, ~[-1.5,1.5] */
+		double vel = 0.0;
+	};
+	ExpoChannel exposureLevel;  /* drives brightness */
+	ExpoChannel exposureSpread; /* drives contrast */
+	bool exposurePrevValid = false;
+	double exposurePrevOffsetX = 0.0;
+	double exposurePrevOffsetY = 0.0;
+	double exposurePrevFx = 0.0;
+	double exposurePrevFy = 0.0;
+
+	/* The direction mapping rolled by randomiseExposureMapping(): each control
+	 * is a signed projection of the pan velocity (vx, vy) onto its own gain
+	 * vector. Not saved - see randomiseExposureMapping. */
+	double exposureLevelGx = 0.0, exposureLevelGy = 1.0;
+	double exposureSpreadGx = 1.0, exposureSpreadGy = 0.0;
+
+	/* One channel of the spring: lag the signed drive, then chase it. */
+	static double stepExposureChannel(ExpoChannel &ch, double signedDrive, double seconds);
 
 	/* Computed once per capture: how much every item has to be enlarged so the
 	 * drift cannot pull the canvas background into view. */
@@ -483,7 +561,18 @@ private:
 		bool framesContent = false;
 		vec2 framingMin{};
 		vec2 framingMax{};
+
+		/* Private Color Correction filter the exposure drift drives, and the
+		 * last brightness/contrast pushed to it in thousandths, so a steady pair
+		 * is not re-sent every frame. Removed from the source on release. */
+		obs_source_t *exposureFilter = nullptr;
+		int exposureBrightnessMilli = -100000;
+		int exposureContrastMilli = -100000;
 	};
+
+	/* Exposure-drift filter helpers, here because they take a SceneItemState. */
+	void ensureExposureFilter(SceneItemState &state);
+	void applyExposureToSources();
 
 	QString sceneItemKey(obs_sceneitem_t *item) const;
 	OrigState readSceneItemTransform(obs_sceneitem_t *item) const;

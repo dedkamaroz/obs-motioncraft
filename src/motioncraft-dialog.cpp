@@ -20,6 +20,7 @@ void signal_handler_disconnect(struct signal_handler *handler, const char *signa
 #include <QColorDialog>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QRandomGenerator>
 #include <QFrame>
 #include <QGridLayout>
 #include <QGuiApplication>
@@ -611,6 +612,41 @@ void MotionCraftDialog::buildWiggleTab()
 	rangeHelp->setWordWrap(true);
 	lay->addWidget(rangeHelp);
 
+	addSection(lay, T("Dialog.Exposure.Section"));
+
+	chkExposureEnabled = new QCheckBox(T("Dialog.Exposure.Enable"), page);
+	chkExposureEnabled->setToolTip(T("Dialog.Exposure.EnableTooltip"));
+	lay->addWidget(chkExposureEnabled);
+
+	spExposureAmount = new QDoubleSpinBox(page);
+	spExposureAmount->setRange(0.0, MotionCraftController::kExposureAmountMax);
+	spExposureAmount->setSingleStep(1.0);
+	spExposureAmount->setDecimals(0);
+	spExposureAmount->setToolTip(T("Dialog.Exposure.AmountTooltip"));
+
+	btnRandomiseExposure = new QPushButton(T("Dialog.Exposure.Randomise"), page);
+	btnRandomiseExposure->setToolTip(T("Dialog.Exposure.RandomiseTooltip"));
+	connect(btnRandomiseExposure, &QPushButton::clicked, this, [this]() {
+		/* Roll the direction mapping live (it is internal and never saved), but
+		 * only STAGE the fresh strength in the dial - committed on Apply like
+		 * every other setting, so Cancel still discards it. Band 25..75: always
+		 * felt, never shouting; the user can nudge it before applying. */
+		MotionCraftController::instance().randomiseExposureMapping();
+		const double amount = 25.0 + QRandomGenerator::global()->bounded(50.0);
+		spExposureAmount->setValue(amount);
+	});
+
+	auto *expoRow = new QHBoxLayout;
+	expoRow->setSpacing(12);
+	expoRow->addWidget(mkField(T("Dialog.Exposure.Amount"), spExposureAmount), 1);
+	expoRow->addWidget(btnRandomiseExposure);
+	expoRow->addStretch(1);
+	lay->addLayout(expoRow);
+
+	auto *expoHelp = new QLabel(T("Dialog.Exposure.Help"), page);
+	expoHelp->setWordWrap(true);
+	lay->addWidget(expoHelp);
+
 	lay->addStretch(1);
 	tabWidget->addTab(page, T("Dialog.Tab.Wiggle"));
 }
@@ -796,6 +832,8 @@ void MotionCraftDialog::loadFromController()
 			spWiggleRange[p][kRangeMax]->setValue(r.max);
 		}
 		spWiggleSeed->setValue(c.wiggleSeed);
+		chkExposureEnabled->setChecked(c.exposureEnabled);
+		spExposureAmount->setValue(c.exposureAmount);
 	}
 
 	if (lstSources)
@@ -862,6 +900,8 @@ void MotionCraftDialog::applyToController()
 	c.wiggleSpeed = readRange(MotionCraftController::kWiggleSpeedParam);
 	c.wiggleSmoothing = readRange(MotionCraftController::kWiggleSmoothParam);
 	c.wiggleSeed = spWiggleSeed->value();
+	c.exposureEnabled = chkExposureEnabled->isChecked();
+	c.exposureAmount = spExposureAmount->value();
 
 	c.includedSources.clear();
 	if (lstSources) {
